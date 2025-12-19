@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import pycountry
+import re
 from typing import Iterable
 
 GUARANTEED_MULTI_LISTEN_ZONE_RANK = 89
@@ -56,6 +57,38 @@ def _safe_log10(value: float | None) -> float | None:
     return float(np.log10(value))
 
 
+def _normalize_language_name(language: str) -> str | None:
+    raw = str(language).strip()
+    if not raw:
+        return None
+    lowered = raw.lower()
+
+    # If this is an ISO code (e.g. "eng", "en"), try to resolve to the canonical name.
+    if re.fullmatch(r"[a-z]{2,3}", lowered):
+        try:
+            lang = (
+                pycountry.languages.get(alpha_2=lowered)
+                or pycountry.languages.get(alpha_3=lowered)
+                or pycountry.languages.get(bibliographic=lowered)
+                or pycountry.languages.get(terminology=lowered)
+            )
+            if lang and getattr(lang, "name", None):
+                return str(lang.name).strip().lower()
+        except (KeyError, AttributeError):
+            pass
+
+    # Otherwise do a fuzzy lookup (handles abbreviations/variants).
+    try:
+        lang = pycountry.languages.lookup(raw)
+        if getattr(lang, "name", None):
+            return str(lang.name).strip().lower()
+    except LookupError:
+        pass
+
+    # Fall back to the original token.
+    return lowered
+
+
 def _language_factor(languages: Iterable[str] | str | None) -> float:
     if not languages:
         return 0.5
@@ -64,9 +97,11 @@ def _language_factor(languages: Iterable[str] | str | None) -> float:
     else:
         languages_iterable = languages
     cleaned = {
-        str(language).strip().lower()
+        normalized
         for language in languages_iterable
         if language is not None
+        for normalized in [_normalize_language_name(language)]
+        if normalized
     }
     if "english" in cleaned:
         return 1.5
@@ -87,7 +122,7 @@ def _resolve_country_name(alpha3: str | None) -> str | None:
 
 
 #     alpha_3, languages ,population,internet_usage_pct, internet_usage_record_year,languages, uk_visits_number, uk_spending_millions
-def predict(df: pd.DataFrame) -> pd.DataFrame:
+def predict(df: pd.DataFrame, *, use_language_factor: bool = True) -> pd.DataFrame:
     df_copy = df.copy()
     df_copy["population"] = pd.to_numeric(df_copy.get("population"), errors="coerce")
     df_copy["internet_usage_pct"] = pd.to_numeric(
@@ -106,17 +141,26 @@ def predict(df: pd.DataFrame) -> pd.DataFrame:
     # Missing UK visits shouldn't zero-out a country; use a "normal" baseline.
     df_copy["uk_score"] = df_copy["uk_score_raw"].fillna(float(uk_score_median))
     df_copy["language_factor"] = df_copy["languages"].apply(_language_factor)
+    df_copy["use_language_factor"] = bool(use_language_factor)
 
     # Make the UK maximal UK-affinity. (UK self-row often has no "visits to UK".)
     if "alpha_3" in df_copy.columns:
         current_max_uk_score = float(df_copy["uk_score"].max())
         df_copy.loc[df_copy["alpha_3"] == "GBR", "uk_score"] = current_max_uk_score
 
-    df_copy["total_score"] = (
+    df_copy["total_score_base"] = (
         df_copy["pop_score"].fillna(0)
         * df_copy["net_score"].fillna(0)
         * df_copy["uk_score"].fillna(float(uk_score_median))
-        * df_copy["language_factor"].fillna(0.5)
+    )
+    df_copy["total_score_with_language"] = df_copy["total_score_base"] * df_copy[
+        "language_factor"
+    ].fillna(0.5)
+    df_copy["total_score_no_language"] = df_copy["total_score_base"]
+    df_copy["total_score"] = (
+        df_copy["total_score_with_language"]
+        if use_language_factor
+        else df_copy["total_score_no_language"]
     )
 
     df_sorted = df_copy.sort_values(

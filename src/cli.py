@@ -30,7 +30,9 @@ def _slugify(text: str) -> str:
     return text.strip("-") or "run"
 
 
-async def _generate_run(label: str, runs_dir: str) -> RunResult:
+async def _generate_run(
+    label: str, runs_dir: str, *, use_language_factor: bool
+) -> RunResult:
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     slug = _slugify(label)
     # Put the human-readable label first so run files are easier to scan.
@@ -46,11 +48,12 @@ async def _generate_run(label: str, runs_dir: str) -> RunResult:
     df = add_internet_usage(df)
     df = add_uk_visits_abroad(df)
 
-    out = predict(df)
+    out = predict(df, use_language_factor=use_language_factor)
     if "country_name" in out.columns:
         out["seen_in_listens"] = out["country_name"].isin(CORRECT_COUNTRIES)
     out["run_label"] = label
     out["run_id"] = run_id
+    out["model_variant"] = "with-language" if use_language_factor else "no-language"
 
     out.to_csv(csv_path, index=False)
     return RunResult(label=label, run_id=run_id, csv_path=csv_path)
@@ -68,6 +71,11 @@ def main() -> None:
         "--runs-dir", default="runs", help="Directory to store generated run CSVs"
     )
     run.add_argument(
+        "--use-language",
+        action="store_true",
+        help="Include language_factor in the score (often hurts if listens are mostly from travellers)",
+    )
+    run.add_argument(
         "--launch",
         action="store_true",
         help="Launch Streamlit after generating, preloading this run",
@@ -76,7 +84,13 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "run":
-        result = asyncio.run(_generate_run(label=args.label, runs_dir=args.runs_dir))
+        result = asyncio.run(
+            _generate_run(
+                label=args.label,
+                runs_dir=args.runs_dir,
+                use_language_factor=bool(args.use_language),
+            )
+        )
         print(result.csv_path)
 
         if args.launch:

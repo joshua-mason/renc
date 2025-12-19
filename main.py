@@ -23,7 +23,8 @@ async def main():
     with_uk_visits = add_uk_visits_abroad(with_internet)
     print(with_uk_visits)
 
-    out = predict(with_uk_visits)
+    # For exploration runs, you may prefer the CLI (`uv run python -m src run ...`).
+    out = predict(with_uk_visits, use_language_factor=True)
     out["seen_in_listens"] = out["country_name"].isin(CORRECT_COUNTRIES)
     out.to_csv("out.csv")
     print(out)

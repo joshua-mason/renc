@@ -24,8 +24,10 @@ async def add_languages_and_population(df: pd.DataFrame) -> pd.DataFrame:
         country_code = country.get("cca3")
         if not country_code:
             continue
+        # restcountries returns a dict like {"eng": "English", "fra": "French"}.
+        # Use the values (human-readable names) so downstream logic can match.
         languages = (
-            list(country.get("languages").keys())
+            list(country.get("languages").values())
             if isinstance(country.get("languages"), dict)
             else []
         )

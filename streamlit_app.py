@@ -125,6 +125,53 @@ if df is None:
     st.info("No CSV found yet. Generate one or upload a CSV in the sidebar.")
     st.stop()
 
+st.subheader("Run summary")
+
+run_label = (
+    df["run_label"].dropna().iloc[0]
+    if "run_label" in df.columns and df["run_label"].notna().any()
+    else None
+)
+run_id = (
+    df["run_id"].dropna().iloc[0]
+    if "run_id" in df.columns and df["run_id"].notna().any()
+    else None
+)
+model_variant = (
+    df["model_variant"].dropna().iloc[0]
+    if "model_variant" in df.columns and df["model_variant"].notna().any()
+    else None
+)
+use_language_factor = (
+    bool(df["use_language_factor"].dropna().iloc[0])
+    if "use_language_factor" in df.columns and df["use_language_factor"].notna().any()
+    else None
+)
+
+rs1, rs2, rs3, rs4 = st.columns(4)
+with rs1:
+    st.metric("Dataset", os.path.basename(str(loaded_from)))
+with rs2:
+    st.metric("run_label", "—" if run_label is None else str(run_label))
+with rs3:
+    st.metric("model_variant", "—" if model_variant is None else str(model_variant))
+with rs4:
+    st.metric(
+        "use_language_factor",
+        (
+            "—"
+            if use_language_factor is None
+            else ("yes" if use_language_factor else "no")
+        ),
+    )
+
+meta = {
+    "loaded_from": loaded_from,
+    "run_id": run_id,
+}
+with st.expander("Details", expanded=False):
+    st.json(meta)
+
 st.sidebar.markdown("---")
 st.sidebar.subheader("Filters")
 
