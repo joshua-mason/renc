@@ -1,0 +1,101 @@
+import argparse
+import asyncio
+import os
+import re
+from dataclasses import dataclass
+from datetime import datetime, timezone
+
+import pandas as pd
+
+from src.config import CORRECT_COUNTRIES
+from src.data import (
+    add_internet_usage,
+    add_languages_and_population,
+    add_uk_visits_abroad,
+    countries,
+)
+from src.model import predict
+
+
+@dataclass(frozen=True)
+class RunResult:
+    label: str
+    run_id: str
+    csv_path: str
+
+
+def _slugify(text: str) -> str:
+    text = text.strip().lower()
+    text = re.sub(r"[^a-z0-9]+", "-", text)
+    return text.strip("-") or "run"
+
+
+async def _generate_run(label: str, runs_dir: str) -> RunResult:
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    slug = _slugify(label)
+    # Put the human-readable label first so run files are easier to scan.
+    run_id = f"{slug}_{ts}"
+
+    os.makedirs(runs_dir, exist_ok=True)
+    csv_path = os.path.join(runs_dir, f"{run_id}.csv")
+
+    countries_array = await countries()
+    df = pd.DataFrame({"alpha_3": countries_array})
+
+    df = await add_languages_and_population(df)
+    df = add_internet_usage(df)
+    df = add_uk_visits_abroad(df)
+
+    out = predict(df)
+    if "country_name" in out.columns:
+        out["seen_in_listens"] = out["country_name"].isin(CORRECT_COUNTRIES)
+    out["run_label"] = label
+    out["run_id"] = run_id
+
+    out.to_csv(csv_path, index=False)
+    return RunResult(label=label, run_id=run_id, csv_path=csv_path)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(prog="renc")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    run = sub.add_parser("run", help="Generate a labeled model run CSV")
+    run.add_argument(
+        "--label", required=True, help="Label for this run (e.g. 'v0', 'lang-tweak')"
+    )
+    run.add_argument(
+        "--runs-dir", default="runs", help="Directory to store generated run CSVs"
+    )
+    run.add_argument(
+        "--launch",
+        action="store_true",
+        help="Launch Streamlit after generating, preloading this run",
+    )
+
+    args = parser.parse_args()
+
+    if args.command == "run":
+        result = asyncio.run(_generate_run(label=args.label, runs_dir=args.runs_dir))
+        print(result.csv_path)
+
+        if args.launch:
+            # Run inside the same environment. If you invoke this via `uv run renc ...`,
+            # Streamlit will be available.
+            import subprocess
+
+            subprocess.run(
+                [
+                    "streamlit",
+                    "run",
+                    "streamlit_app.py",
+                    "--",
+                    "--csv",
+                    result.csv_path,
+                ],
+                check=True,
+            )
+
+
+if __name__ == "__main__":
+    main()

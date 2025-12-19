@@ -8,9 +8,7 @@ import pandas as pd
 import asyncio
 
 from src.model import predict
-
-# TODO check Gambon
-CORRECT_COUNTRIES = ["San Marino", "Bhutan", "Fiji", "Faroe Islands", "Gabon"]
+from src.config import CORRECT_COUNTRIES
 
 
 async def main():

@@ -9,4 +9,5 @@ dependencies = [
     "pycountry>=24.6.1",
     "requests>=2.32.5",
     "ruff>=0.14.9",
+    "streamlit>=1.52.2",
 ]
