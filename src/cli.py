@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 import pandas as pd
 
-from src.config import CORRECT_COUNTRIES
+from src.config import CORRECT_COUNTRIES, INCORRECT_COUNTRIES
 from src.data import (
     add_internet_usage,
     add_languages_and_population,
@@ -61,6 +61,8 @@ async def _generate_run(
     )
     if "country_name" in out.columns:
         out["seen_in_listens"] = out["country_name"].isin(CORRECT_COUNTRIES)
+        out["known_correct"] = out["seen_in_listens"]
+        out["known_incorrect"] = out["country_name"].isin(INCORRECT_COUNTRIES)
     out["run_label"] = label
     out["run_id"] = run_id
     out["model_variant"] = "with-language" if use_language_factor else "no-language"

@@ -283,6 +283,7 @@ has_rank = rank_col is not None and rank_col in comparison_df.columns
 has_score = "total_score" in comparison_df.columns
 has_candidate = "is_single_listen_candidate" in comparison_df.columns
 has_seen = "seen_in_listens" in comparison_df.columns
+has_incorrect = "known_incorrect" in comparison_df.columns
 
 if has_rank:
     comparison_df[rank_col] = pd.to_numeric(comparison_df[rank_col], errors="coerce")
@@ -324,15 +325,33 @@ pred_mask = (
 seen_mask = (
     comparison_df["seen_in_listens"] == True if has_seen else False
 )  # noqa: E712
+incorrect_mask = (
+    comparison_df["known_incorrect"] == True if has_incorrect else False
+)  # noqa: E712
 
 predicted = (
     comparison_df[pred_mask].copy() if has_candidate else comparison_df.iloc[0:0].copy()
 )
 actual = comparison_df[seen_mask].copy() if has_seen else comparison_df.iloc[0:0].copy()
+incorrect = (
+    comparison_df[incorrect_mask].copy()
+    if has_incorrect
+    else comparison_df.iloc[0:0].copy()
+)
 
 overlap_count = None
 if id_col and not predicted.empty and not actual.empty:
     overlap_count = len(set(predicted[id_col].dropna()) & set(actual[id_col].dropna()))
+
+incorrect_overlap_count = None
+incorrect_fp_rate = None
+if id_col and not predicted.empty and not incorrect.empty:
+    incorrect_overlap_count = len(
+        set(predicted[id_col].dropna()) & set(incorrect[id_col].dropna())
+    )
+    predicted_count = int(pred_mask.sum())
+    if predicted_count > 0:
+        incorrect_fp_rate = float(incorrect_overlap_count) / float(predicted_count)
 
 mean_abs_rank_distance = None
 rmse_rank_distance = None
@@ -353,7 +372,7 @@ if has_rank and not predicted.empty and not actual.empty:
             mean_abs_rank_distance_norm = mean_abs_rank_distance / denom
             rmse_rank_distance_norm = rmse_rank_distance / denom
 
-mc1, mc2, mc3, mc4 = st.columns(4)
+mc1, mc2, mc3, mc4, mc5, mc6 = st.columns(6)
 with mc1:
     st.metric(
         "Predicted candidates (count)",
@@ -381,6 +400,21 @@ with mc4:
             )
         ),
     )
+with mc5:
+    st.metric(
+        "Known incorrect (count)",
+        f"{int(incorrect_mask.sum()) if has_incorrect else 0:,}",
+    )
+with mc6:
+    st.metric(
+        "Predicted ∩ incorrect",
+        (
+            "—"
+            if incorrect_overlap_count is None
+            else f"{incorrect_overlap_count:,}"
+            + (f" ({incorrect_fp_rate:.1%})" if incorrect_fp_rate is not None else "")
+        ),
+    )
 
 if rmse_rank_distance is not None:
     st.caption(
@@ -404,16 +438,36 @@ if has_rank and has_score:
 
     plot["predicted"] = pred_mask if has_candidate else False
     plot["actual"] = seen_mask if has_seen else False
+    plot["incorrect"] = incorrect_mask if has_incorrect else False
     plot["group"] = np.select(
-        [plot["predicted"] & plot["actual"], plot["predicted"], plot["actual"]],
-        ["predicted & actual", "predicted", "actual"],
+        [
+            plot["predicted"] & plot["actual"],
+            plot["predicted"] & plot["incorrect"],
+            plot["actual"],
+            plot["incorrect"],
+            plot["predicted"],
+        ],
+        [
+            "predicted & actual",
+            "predicted & incorrect",
+            "actual",
+            "incorrect",
+            "predicted",
+        ],
         default="other",
     )
     plot = plot.dropna(subset=[rank_col, "y_score"])
 
     color_scale = alt.Scale(
-        domain=["predicted & actual", "predicted", "actual", "other"],
-        range=["#7c3aed", "#f59e0b", "#10b981", "#94a3b8"],
+        domain=[
+            "predicted & actual",
+            "predicted & incorrect",
+            "predicted",
+            "actual",
+            "incorrect",
+            "other",
+        ],
+        range=["#7c3aed", "#ef4444", "#f59e0b", "#10b981", "#dc2626", "#94a3b8"],
     )
 
     chart = (
@@ -426,16 +480,30 @@ if has_rank and has_score:
             size=alt.Size(
                 "group:N",
                 scale=alt.Scale(
-                    domain=["predicted & actual", "predicted", "actual", "other"],
-                    range=[180, 140, 140, 30],
+                    domain=[
+                        "predicted & actual",
+                        "predicted & incorrect",
+                        "predicted",
+                        "actual",
+                        "incorrect",
+                        "other",
+                    ],
+                    range=[180, 180, 140, 140, 140, 30],
                 ),
                 legend=None,
             ),
             opacity=alt.Opacity(
                 "group:N",
                 scale=alt.Scale(
-                    domain=["predicted & actual", "predicted", "actual", "other"],
-                    range=[1.0, 0.95, 0.95, 0.35],
+                    domain=[
+                        "predicted & actual",
+                        "predicted & incorrect",
+                        "predicted",
+                        "actual",
+                        "incorrect",
+                        "other",
+                    ],
+                    range=[1.0, 1.0, 0.95, 0.95, 0.95, 0.35],
                 ),
                 legend=None,
             ),
@@ -450,6 +518,27 @@ if has_rank and has_score:
         .interactive()
     )
     st.altair_chart(chart, width="stretch")
+
+    if (
+        has_incorrect
+        and "country_name" in comparison_df.columns
+        and rank_col is not None
+    ):
+        with st.expander("Known incorrect countries (rows)", expanded=False):
+            cols = [
+                c
+                for c in ["model_rank", "country_name", "alpha_3", "total_score"]
+                if c in comparison_df.columns
+            ]
+            st.dataframe(
+                comparison_df[comparison_df["known_incorrect"] == True][
+                    cols
+                ].sort_values(  # noqa: E712
+                    by="model_rank" if "model_rank" in cols else cols[0]
+                ),
+                width="stretch",
+                height=260,
+            )
 else:
     st.info(
         "To show the comparison chart, ensure your CSV includes `model_rank` and `total_score` "

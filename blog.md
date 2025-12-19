@@ -30,3 +30,18 @@
 - **Finding**: Adding `language_factor` made results worse.
 - **Interpretation**: Listens likely driven by travellers/cultural proximity; UK visits already captures this, while “official/local language” is the wrong mechanism.
 - **Decision**: Keep language in code, but make it optional (`use_language_factor`) and log both `total_score_no_language` and `total_score_with_language` in every run for documentation.
+
+### 2025-12-19 — Label correction: Bhutan
+- **Correction**: Bhutan was incorrectly included as a \"known single-listen\" country earlier; it belongs in the incorrect list.
+- **Impact**: This may have biased earlier comparisons (including the language-factor evaluation), so prior conclusions should be treated as provisional until re-run with corrected labels.
+
+### 2025-12-19 — Negative evidence: incorrect countries list
+- **Decision**: Maintain `INCORRECT_COUNTRIES` alongside `CORRECT_COUNTRIES` and surface them in plots.\n+- **Why**: This gives us a simple false-positive check (e.g., `predicted ∩ incorrect`) rather than optimizing only for overlap with a tiny positive set.
+
+### 2025-12-19 — Potential new data: episode-level listens (patchy)
+- **Observation**: We can sometimes recover per-episode country listens for countries in the incorrect list (patchy coverage).
+- **Next step**: Use this as additional supervision (even if incomplete) to constrain models beyond binary “correct/incorrect” lists.
+
+### 2025-12-19 — Future: use model ranking to score human guesses
+- **Idea**: Use the model’s rank/score as a way to quantify how “bad” a guess was (e.g., penalize guesses that the model ranks extremely low).
+- **Why**: Lets us compare different people/strategies consistently, even before we have full ground-truth per-country listen counts.
