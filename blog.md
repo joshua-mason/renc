@@ -36,7 +36,8 @@
 - **Impact**: This may have biased earlier comparisons (including the language-factor evaluation), so prior conclusions should be treated as provisional until re-run with corrected labels.
 
 ### 2025-12-19 — Negative evidence: incorrect countries list
-- **Decision**: Maintain `INCORRECT_COUNTRIES` alongside `CORRECT_COUNTRIES` and surface them in plots.\n+- **Why**: This gives us a simple false-positive check (e.g., `predicted ∩ incorrect`) rather than optimizing only for overlap with a tiny positive set.
+- **Decision**: Maintain `INCORRECT_COUNTRIES` alongside `CORRECT_COUNTRIES` and surface them in plots.
+- **Why**: This gives us a simple false-positive check (e.g., `predicted ∩ incorrect`) rather than optimizing only for overlap with a tiny positive set.
 
 ### 2025-12-19 — Potential new data: episode-level listens (patchy)
 - **Observation**: We can sometimes recover per-episode country listens for countries in the incorrect list (patchy coverage).
@@ -45,3 +46,21 @@
 ### 2025-12-19 — Future: use model ranking to score human guesses
 - **Idea**: Use the model’s rank/score as a way to quantify how “bad” a guess was (e.g., penalize guesses that the model ranks extremely low).
 - **Why**: Lets us compare different people/strategies consistently, even before we have full ground-truth per-country listen counts.
+
+### 2025-12-19 — Language factors: now helpful (after tuning)
+- **Observation**: With corrected labels and milder language multipliers (e.g. English ~1.25, Euro/Latin ~1.0, other ~0.75), language factors improve guesses in recent runs.
+- **Note**: Earlier conclusions about language were confounded by the Bhutan label error and stronger multipliers.
+- **Bug fix**: `Wrong@rank` now shows `0.0000` when there are zero incorrect overlaps (instead of “—”).
+- **Open question**: How to set these multipliers systematically (candidate: Bayesian/simulation approach rather than manual tuning).
+
+### 2025-12-19 — Option A: tune language factors via search + holdout
+- **Decision**: Stop hand-tuning language multipliers and instead do a small random search over plausible ranges.
+- **Method**: Evaluate each candidate set of multipliers across many random train/test splits (“many seeds”). Prefer candidates that:
+  - push `INCORRECT_COUNTRIES` far from the candidate zone (low **zone closeness**)
+  - pull `CORRECT_COUNTRIES` toward the zone (high **zone closeness**)
+  - use `Wrong@rank` as an explicit false-positive tie-breaker
+- **Output**: Save all trials to a CSV so results are reproducible and comparable across runs.
+
+### 2025-12-19 — Blog name idea
+- **Idea**: `twoinsix.com` as a short name for the write-up site.
+- **Meaning**: captures the “pick 6 countries / maybe 2 hits” vibe of the project and keeps the framing memorable.

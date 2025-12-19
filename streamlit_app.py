@@ -345,6 +345,7 @@ if id_col and not predicted.empty and not actual.empty:
 
 incorrect_overlap_count = None
 incorrect_fp_rate = None
+wrong_at_rank = None
 if id_col and not predicted.empty and not incorrect.empty:
     incorrect_overlap_count = len(
         set(predicted[id_col].dropna()) & set(incorrect[id_col].dropna())
@@ -352,6 +353,14 @@ if id_col and not predicted.empty and not incorrect.empty:
     predicted_count = int(pred_mask.sum())
     if predicted_count > 0:
         incorrect_fp_rate = float(incorrect_overlap_count) / float(predicted_count)
+    if has_rank and rank_col is not None and rank_col in comparison_df.columns:
+        # If there are *no* incorrect overlaps, this should be a real 0.0 (not "—").
+        wrong_at_rank = 0.0
+        wrong_ranks = pd.to_numeric(
+            comparison_df.loc[pred_mask & incorrect_mask, rank_col], errors="coerce"
+        ).dropna()
+        if not wrong_ranks.empty:
+            wrong_at_rank = float((1.0 / wrong_ranks).sum())
 
 mean_abs_rank_distance = None
 rmse_rank_distance = None
@@ -372,7 +381,7 @@ if has_rank and not predicted.empty and not actual.empty:
             mean_abs_rank_distance_norm = mean_abs_rank_distance / denom
             rmse_rank_distance_norm = rmse_rank_distance / denom
 
-mc1, mc2, mc3, mc4, mc5, mc6 = st.columns(6)
+mc1, mc2, mc3, mc4, mc5, mc6, mc7 = st.columns(7)
 with mc1:
     st.metric(
         "Predicted candidates (count)",
@@ -414,6 +423,12 @@ with mc6:
             else f"{incorrect_overlap_count:,}"
             + (f" ({incorrect_fp_rate:.1%})" if incorrect_fp_rate is not None else "")
         ),
+    )
+with mc7:
+    st.metric(
+        "Wrong@rank",
+        "—" if wrong_at_rank is None else f"{wrong_at_rank:.4f}",
+        help="Sum of 1/rank over (predicted ∩ incorrect). Lower is better; penalizes high-ranked wrong picks more.",
     )
 
 if rmse_rank_distance is not None:

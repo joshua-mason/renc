@@ -89,9 +89,15 @@ def _normalize_language_name(language: str) -> str | None:
     return lowered
 
 
-def _language_factor(languages: Iterable[str] | str | None) -> float:
+def _language_factor(
+    languages: Iterable[str] | str | None,
+    *,
+    english_factor: float,
+    euro_latin_factor: float,
+    other_factor: float,
+) -> float:
     if not languages:
-        return 0.5
+        return float(other_factor)
     if isinstance(languages, str):
         languages_iterable = (languages,)
     else:
@@ -104,10 +110,10 @@ def _language_factor(languages: Iterable[str] | str | None) -> float:
         if normalized
     }
     if "english" in cleaned:
-        return 1.5
+        return float(english_factor)
     if cleaned & EUROPEAN_AND_LATIN_LANGUAGES:
-        return 1.1
-    return 0.5
+        return float(euro_latin_factor)
+    return float(other_factor)
 
 
 # TODO: We may eventually want to cache this or pull the country name earlier.
@@ -126,6 +132,9 @@ def predict(
     df: pd.DataFrame,
     *,
     use_language_factor: bool = True,
+    language_english_factor: float = 1.161,
+    language_euro_latin_factor: float = 1.042,
+    language_other_factor: float = 0.512,
     uk_missing_strategy: str = "p10",
     uk_floor: float = 0.05,
 ) -> pd.DataFrame:
@@ -191,7 +200,17 @@ def predict(
         floor = 0.5
 
     df_copy["uk_score"] = floor + (1.0 - floor) * uk_scaled.fillna(floor)
-    df_copy["language_factor"] = df_copy["languages"].apply(_language_factor)
+    df_copy["language_english_factor"] = float(language_english_factor)
+    df_copy["language_euro_latin_factor"] = float(language_euro_latin_factor)
+    df_copy["language_other_factor"] = float(language_other_factor)
+    df_copy["language_factor"] = df_copy["languages"].apply(
+        lambda langs: _language_factor(
+            langs,
+            english_factor=float(language_english_factor),
+            euro_latin_factor=float(language_euro_latin_factor),
+            other_factor=float(language_other_factor),
+        )
+    )
     df_copy["use_language_factor"] = bool(use_language_factor)
 
     # Make the UK maximal UK-affinity. (UK self-row often has no "visits to UK".)
