@@ -1,3 +1,31 @@
 # Central place for "ground truth" / labels you compare against.
 
-CORRECT_COUNTRIES = ["San Marino", "Bhutan", "Fiji", "Faroe Islands", "Gabon"]
+CORRECT_COUNTRIES = ["San Marino", "Fiji", "Faroe Islands", "Gabon"]
+INCORRECT_COUNTRIES = [
+    "Madagascar",
+    "Namibia",
+    "North Korea",
+    "Costa Rica",
+    "Uganda",
+    "Northern Mariana Islands",
+    "Guyana",
+    "Bhutan",
+    "Lichtenstein",
+    "Brunei",
+    "Nepal",
+    "Turkmenistan",
+    "Belarus",
+    "Aruba",
+    "Ecuador",
+    "Iraq",
+    "Eswatini",
+    "US Virgin Islands",
+    "Seychelles",
+    "Mauritius",
+    "Georgia",
+    "Vatican City",
+    "Oman",
+    "Vanuatu",
+    "Bolivia",
+    "Palau",
+]

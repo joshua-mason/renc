@@ -31,7 +31,12 @@ def _slugify(text: str) -> str:
 
 
 async def _generate_run(
-    label: str, runs_dir: str, *, use_language_factor: bool
+    label: str,
+    runs_dir: str,
+    *,
+    use_language_factor: bool,
+    uk_missing_strategy: str,
+    uk_floor: float,
 ) -> RunResult:
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     slug = _slugify(label)
@@ -48,12 +53,19 @@ async def _generate_run(
     df = add_internet_usage(df)
     df = add_uk_visits_abroad(df)
 
-    out = predict(df, use_language_factor=use_language_factor)
+    out = predict(
+        df,
+        use_language_factor=use_language_factor,
+        uk_missing_strategy=uk_missing_strategy,
+        uk_floor=uk_floor,
+    )
     if "country_name" in out.columns:
         out["seen_in_listens"] = out["country_name"].isin(CORRECT_COUNTRIES)
     out["run_label"] = label
     out["run_id"] = run_id
     out["model_variant"] = "with-language" if use_language_factor else "no-language"
+    out["uk_missing_strategy_cli"] = uk_missing_strategy
+    out["uk_floor_cli"] = float(uk_floor)
 
     out.to_csv(csv_path, index=False)
     return RunResult(label=label, run_id=run_id, csv_path=csv_path)
@@ -76,6 +88,18 @@ def main() -> None:
         help="Include language_factor in the score (often hurts if listens are mostly from travellers)",
     )
     run.add_argument(
+        "--uk-missing",
+        default="p10",
+        choices=["p10", "p5", "median", "zero", "ignore"],
+        help="How to treat missing uk_visits_number (default: p10 conservative imputation).",
+    )
+    run.add_argument(
+        "--uk-floor",
+        type=float,
+        default=0.05,
+        help="Floor for uk_score after scaling (prevents multiplicative collapse).",
+    )
+    run.add_argument(
         "--launch",
         action="store_true",
         help="Launch Streamlit after generating, preloading this run",
@@ -89,6 +113,8 @@ def main() -> None:
                 label=args.label,
                 runs_dir=args.runs_dir,
                 use_language_factor=bool(args.use_language),
+                uk_missing_strategy=str(args.uk_missing),
+                uk_floor=float(args.uk_floor),
             )
         )
         print(result.csv_path)

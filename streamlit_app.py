@@ -147,8 +147,18 @@ use_language_factor = (
     if "use_language_factor" in df.columns and df["use_language_factor"].notna().any()
     else None
 )
+uk_missing_strategy = (
+    df["uk_missing_strategy"].dropna().iloc[0]
+    if "uk_missing_strategy" in df.columns and df["uk_missing_strategy"].notna().any()
+    else None
+)
+uk_floor = (
+    float(df["uk_floor"].dropna().iloc[0])
+    if "uk_floor" in df.columns and df["uk_floor"].notna().any()
+    else None
+)
 
-rs1, rs2, rs3, rs4 = st.columns(4)
+rs1, rs2, rs3, rs4, rs5, rs6 = st.columns(6)
 with rs1:
     st.metric("Dataset", os.path.basename(str(loaded_from)))
 with rs2:
@@ -164,6 +174,13 @@ with rs4:
             else ("yes" if use_language_factor else "no")
         ),
     )
+with rs5:
+    st.metric(
+        "uk_missing_strategy",
+        "—" if uk_missing_strategy is None else str(uk_missing_strategy),
+    )
+with rs6:
+    st.metric("uk_floor", "—" if uk_floor is None else f"{uk_floor:.3f}")
 
 meta = {
     "loaded_from": loaded_from,
@@ -274,9 +291,26 @@ if has_score:
     comparison_df["total_score"] = pd.to_numeric(
         comparison_df["total_score"], errors="coerce"
     )
-    comparison_df["log10_total_score"] = _log10_safe_series(
-        comparison_df["total_score"].fillna(0) + 1e-12
+    # Allow switching between raw score and log variants (log can look odd for <1).
+    y_mode = st.radio(
+        "Y-axis",
+        options=["score", "log10(score)", "log10(1+score)"],
+        horizontal=True,
+        index=2,
     )
+    if y_mode == "score":
+        comparison_df["y_score"] = comparison_df["total_score"]
+        y_title = "total_score"
+    elif y_mode == "log10(score)":
+        comparison_df["y_score"] = _log10_safe_series(
+            comparison_df["total_score"].fillna(0) + 1e-12
+        )
+        y_title = "log10(total_score)"
+    else:
+        comparison_df["y_score"] = _log10_safe_series(
+            comparison_df["total_score"].clip(lower=0).fillna(0) + 1.0
+        )
+        y_title = "log10(1 + total_score)"
 
 id_col = (
     "alpha_3"
@@ -360,7 +394,7 @@ if rmse_rank_distance is not None:
     )
 
 if has_rank and has_score:
-    plot = comparison_df[[rank_col, "log10_total_score"]].copy()
+    plot = comparison_df[[rank_col, "y_score"]].copy()
     if "country_name" in comparison_df.columns:
         plot["country"] = comparison_df["country_name"]
     elif "alpha_3" in comparison_df.columns:
@@ -375,7 +409,7 @@ if has_rank and has_score:
         ["predicted & actual", "predicted", "actual"],
         default="other",
     )
-    plot = plot.dropna(subset=[rank_col, "log10_total_score"])
+    plot = plot.dropna(subset=[rank_col, "y_score"])
 
     color_scale = alt.Scale(
         domain=["predicted & actual", "predicted", "actual", "other"],
@@ -387,7 +421,7 @@ if has_rank and has_score:
         .mark_circle()
         .encode(
             x=alt.X(f"{rank_col}:Q", title="model_rank"),
-            y=alt.Y("log10_total_score:Q", title="log10(total_score)"),
+            y=alt.Y("y_score:Q", title=y_title),
             color=alt.Color("group:N", scale=color_scale, legend=alt.Legend(title="")),
             size=alt.Size(
                 "group:N",
@@ -408,7 +442,7 @@ if has_rank and has_score:
             tooltip=[
                 alt.Tooltip("country:N", title="country"),
                 alt.Tooltip(f"{rank_col}:Q", title="rank"),
-                alt.Tooltip("log10_total_score:Q", title="log10(total_score)"),
+                alt.Tooltip("y_score:Q", title=y_title),
                 alt.Tooltip("group:N", title="group"),
             ],
         )

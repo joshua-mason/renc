@@ -122,7 +122,13 @@ def _resolve_country_name(alpha3: str | None) -> str | None:
 
 
 #     alpha_3, languages ,population,internet_usage_pct, internet_usage_record_year,languages, uk_visits_number, uk_spending_millions
-def predict(df: pd.DataFrame, *, use_language_factor: bool = True) -> pd.DataFrame:
+def predict(
+    df: pd.DataFrame,
+    *,
+    use_language_factor: bool = True,
+    uk_missing_strategy: str = "p10",
+    uk_floor: float = 0.05,
+) -> pd.DataFrame:
     df_copy = df.copy()
     df_copy["population"] = pd.to_numeric(df_copy.get("population"), errors="coerce")
     df_copy["internet_usage_pct"] = pd.to_numeric(
@@ -134,24 +140,68 @@ def predict(df: pd.DataFrame, *, use_language_factor: bool = True) -> pd.DataFra
 
     df_copy["pop_score"] = df_copy["population"].apply(_safe_log10)
     df_copy["net_score"] = df_copy["internet_usage_pct"] / 100
-    df_copy["uk_score_raw"] = df_copy["uk_visits_number"].apply(_safe_log10)
-    uk_score_median = df_copy["uk_score_raw"].median(skipna=True)
-    if pd.isna(uk_score_median):
-        uk_score_median = 1.0
-    # Missing UK visits shouldn't zero-out a country; use a "normal" baseline.
-    df_copy["uk_score"] = df_copy["uk_score_raw"].fillna(float(uk_score_median))
+    # UK visits are a strong proxy for cultural closeness. Missing is likely "unknown / not
+    # tracked (often low)" rather than "average", so we impute conservatively.
+    df_copy["uk_visits_missing"] = df_copy["uk_visits_number"].isna()
+    df_copy["uk_score_raw"] = np.log10(df_copy["uk_visits_number"].clip(lower=0) + 1)
+
+    strategy = str(uk_missing_strategy).lower().strip()
+    if strategy not in {"p10", "p5", "median", "zero", "ignore"}:
+        strategy = "p10"
+
+    observed_raw = df_copy.loc[~df_copy["uk_visits_missing"], "uk_score_raw"].dropna()
+    if observed_raw.empty:
+        impute_value = 0.0
+    elif strategy == "p5":
+        impute_value = float(observed_raw.quantile(0.05))
+    elif strategy == "p10":
+        impute_value = float(observed_raw.quantile(0.10))
+    elif strategy == "median":
+        impute_value = float(observed_raw.median())
+    elif strategy == "zero":
+        impute_value = 0.0
+    else:  # ignore
+        impute_value = float("nan")
+
+    df_copy["uk_missing_strategy"] = strategy
+    df_copy["uk_floor"] = float(uk_floor)
+    df_copy["uk_impute_value"] = impute_value
+
+    # Fill missing with a conservative value, then map to (floor..1] so we never hard-zero
+    # the full multiplicative score purely due to UK-visits.
+    df_copy["uk_score_raw_imputed"] = df_copy["uk_score_raw"].copy()
+    if strategy != "ignore":
+        df_copy["uk_score_raw_imputed"] = df_copy["uk_score_raw_imputed"].fillna(
+            impute_value
+        )
+
+    raw_min = float(df_copy["uk_score_raw_imputed"].min(skipna=True))
+    raw_max = float(df_copy["uk_score_raw_imputed"].max(skipna=True))
+    denom = raw_max - raw_min
+    if not np.isfinite(denom) or denom <= 0:
+        uk_scaled = pd.Series(1.0, index=df_copy.index)
+    else:
+        uk_scaled = (df_copy["uk_score_raw_imputed"] - raw_min) / denom
+        uk_scaled = uk_scaled.clip(lower=0.0, upper=1.0)
+
+    floor = float(uk_floor)
+    if not np.isfinite(floor) or floor < 0:
+        floor = 0.0
+    if floor > 0.5:
+        floor = 0.5
+
+    df_copy["uk_score"] = floor + (1.0 - floor) * uk_scaled.fillna(floor)
     df_copy["language_factor"] = df_copy["languages"].apply(_language_factor)
     df_copy["use_language_factor"] = bool(use_language_factor)
 
     # Make the UK maximal UK-affinity. (UK self-row often has no "visits to UK".)
     if "alpha_3" in df_copy.columns:
-        current_max_uk_score = float(df_copy["uk_score"].max())
-        df_copy.loc[df_copy["alpha_3"] == "GBR", "uk_score"] = current_max_uk_score
+        df_copy.loc[df_copy["alpha_3"] == "GBR", "uk_score"] = 1.0
 
     df_copy["total_score_base"] = (
         df_copy["pop_score"].fillna(0)
         * df_copy["net_score"].fillna(0)
-        * df_copy["uk_score"].fillna(float(uk_score_median))
+        * df_copy["uk_score"].fillna(floor)
     )
     df_copy["total_score_with_language"] = df_copy["total_score_base"] * df_copy[
         "language_factor"

@@ -14,6 +14,12 @@
 - **Decision**: If `uk_visits_number` missing, fill UK score with a “normal” baseline (median of log10(visits)).
 - **Decision**: Set UK (`GBR`) to maximal UK-affinity (self-row otherwise often missing visits).
 
+### 2025-12-19 — UK score: missingness rethink (revision)
+- **Observation**: Median-imputing missing UK visits is likely optimistic.
+- **Hypothesis**: Missing often means “too small / not tracked”, not “average”.
+- **Decision**: Treat missing as **unknown but likely low** by imputing a low percentile (p10 by default) and applying a **non-zero floor** to the UK multiplier so the multiplicative model doesn’t collapse scores to 0.
+- **Implementation**: `uk_raw = log10(uk_visits + 1)`, missing → p10/p5/median/zero/ignore (flagged), then scale to `(uk_floor..1]`.
+
 ### 2025-12-19 — Added run workflow + viewer
 - **Decision**: Generate labeled run CSVs into `runs/` to track experiments over time.
 - **Tooling**: `uv run python -m src run --label ...` and Streamlit dataset picker.
