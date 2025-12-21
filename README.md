@@ -26,3 +26,4 @@ uv run streamlit run streamlit_app.py
 
 - Known single-listen countries for comparison live in `src/config.py` (`CORRECT_COUNTRIES`).
 - Raw inputs are in `raw/` and feature building is in `src/data.py`.
+- Bayesian model features currently include `log(population)`, `internet_usage_pct`, and `log1p(distance_from_uk_km)` (computed from country lat/lon via RestCountries).

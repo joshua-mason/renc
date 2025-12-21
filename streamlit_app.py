@@ -562,15 +562,104 @@ else:
 
 st.markdown("---")
 
+if "bayes_p_one_mean" in df.columns:
+    st.subheader("Bayesian single-listen ranking")
+    st.caption(
+        "Uses posterior mean/interval of P(listens=1) from the Bayesian Poisson GLM "
+        "(trained on `CORRECT_COUNTRIES` as 1 and `COUNTRIES_WITH_MORE_THAN_ONE_LISTEN` as a fixed multi-count)."
+    )
+
+    bayes_df = filtered_sorted.copy()
+    for c in [
+        "bayes_p_one_mean",
+        "bayes_p_one_hdi_low",
+        "bayes_p_one_hdi_high",
+        "bayes_mu_mean",
+        "bayes_mu_hdi_low",
+        "bayes_mu_hdi_high",
+    ]:
+        if c in bayes_df.columns:
+            bayes_df[c] = pd.to_numeric(bayes_df[c], errors="coerce")
+
+    label_col = "country_name" if "country_name" in bayes_df.columns else "alpha_3"
+    top_n_bayes = st.slider("Top N (Bayes)", 5, 50, 20)
+
+    # Prefer showing prediction targets (unknown labels) if present.
+    if "bayes_label" in bayes_df.columns:
+        unknown_only = st.checkbox(
+            "Only bayes_label=unknown", value=True, help="Hide training labels (one/multi)"
+        )
+    else:
+        unknown_only = False
+
+    show_df = bayes_df
+    if unknown_only and "bayes_label" in show_df.columns:
+        show_df = show_df[show_df["bayes_label"] == "unknown"]
+
+    show_df = show_df.sort_values("bayes_p_one_mean", ascending=False).head(top_n_bayes)
+    cols = [
+        c
+        for c in [
+            "bayes_rank",
+            label_col,
+            "bayes_label",
+            "bayes_p_one_mean",
+            "bayes_p_one_hdi_low",
+            "bayes_p_one_hdi_high",
+            "bayes_mu_mean",
+            "bayes_mu_hdi_low",
+            "bayes_mu_hdi_high",
+            "model_rank",
+            "total_score",
+        ]
+        if c in show_df.columns
+    ]
+    st.dataframe(show_df[cols], width="stretch", height=360)
+
+    # Simple plot: Bayes P(one) vs heuristic rank (if available).
+    if "model_rank" in bayes_df.columns:
+        tmp = bayes_df[[label_col, "model_rank", "bayes_p_one_mean"]].copy()
+        tmp["model_rank"] = pd.to_numeric(tmp["model_rank"], errors="coerce")
+        tmp = tmp.dropna(subset=["model_rank", "bayes_p_one_mean"])
+        tmp = tmp.rename(columns={label_col: "country"})
+
+        chart = (
+            alt.Chart(tmp)
+            .mark_circle()
+            .encode(
+                x=alt.X("model_rank:Q", title="heuristic model_rank"),
+                y=alt.Y("bayes_p_one_mean:Q", title="Bayes P(listens=1) (mean)"),
+                tooltip=[
+                    alt.Tooltip("country:N", title="country"),
+                    alt.Tooltip("model_rank:Q", title="heuristic_rank"),
+                    alt.Tooltip("bayes_p_one_mean:Q", title="p_one_mean"),
+                ],
+            )
+            .properties(height=320)
+            .interactive()
+        )
+        st.altair_chart(chart, width="stretch")
+
+    st.markdown("---")
+
 st.subheader("Table")
 
 preferred_cols = [
     c
     for c in [
         "model_rank",
+        "bayes_rank",
         "alpha_3",
         "country_name",
         "total_score",
+        "bayes_label",
+        "bayes_y_observed",
+        "bayes_p_one_mean",
+        "bayes_p_one_hdi_low",
+        "bayes_p_one_hdi_high",
+        "bayes_mu_mean",
+        "bayes_mu_hdi_low",
+        "bayes_mu_hdi_high",
         "pop_score",
         "net_score",
         "uk_score",
