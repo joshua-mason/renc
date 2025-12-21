@@ -258,11 +258,24 @@ Use this viewer to:
     meta_cols = [
         "run_label",
         "run_id",
+        "bayes_likelihood",
+        "bayes_nb_alpha_mean",
         "bayes_use_distance",
+        "bayes_use_censoring",
         "bayes_train_n",
         "bayes_train_n_one",
         "bayes_train_n_multi",
         "bayes_train_n_zero",
+        "bayes_train_n_censored",
+        "bayes_total_countries",
+        "bayes_target_total_zero",
+        "bayes_target_total_nonzero",
+        "bayes_target_total_one",
+        "bayes_target_total_multi",
+        "bayes_expected_total_zero_mean",
+        "bayes_expected_total_nonzero_mean",
+        "bayes_expected_total_one_mean",
+        "bayes_expected_total_multi_mean",
         "bayes_number_of_countries_with_listens",
         "bayes_number_of_countries_with_one_listen",
         "bayes_rhat_max",
@@ -285,6 +298,10 @@ with tabs[1]:
     # as a column so you can sort/filter directly in the dataframe UI.
     if "bayes_y_observed" in df.columns:
         df["bayes_y_observed"] = pd.to_numeric(df["bayes_y_observed"], errors="coerce")
+    if "bayes_y_censored_lower_bound" in df.columns:
+        df["bayes_y_censored_lower_bound"] = pd.to_numeric(
+            df["bayes_y_censored_lower_bound"], errors="coerce"
+        )
 
     # The sidebar filter defaults to bayes_label=unknown, which hides training rows.
     # For data inspection, default to showing the full dataset.
@@ -297,6 +314,8 @@ with tabs[1]:
             country_col,
             "alpha_3",
             "bayes_y_observed",
+            "bayes_y_censored_lower_bound",
+            "bayes_is_censored",
             "population",
             "english_speakers_pct",
             "internet_usage_pct",
@@ -343,8 +362,31 @@ with tabs[1]:
 
 with tabs[2]:
     st.subheader("Bayes results")
+    left, right = st.columns([1, 1])
+    with left:
+        include_training = st.checkbox(
+            "Include training rows (override sidebar filters)",
+            value=False,
+            help="The sidebar defaults to `bayes_label=unknown`, which hides observed rows. Enable this to include observed rows in the Bayes tables/charts.",
+        )
+    with right:
+        only_observed = st.checkbox(
+            "Only observed rows (countries with data)",
+            value=False,
+            help="Show only countries where `bayes_y_observed` is present (i.e. the training labels).",
+        )
+
+    bayes_rows = df if include_training else filtered
+    if only_observed:
+        if "bayes_y_observed" in bayes_rows.columns:
+            bayes_rows = bayes_rows[
+                pd.to_numeric(bayes_rows["bayes_y_observed"], errors="coerce").notna()
+            ]
+        else:
+            st.info("This CSV has no `bayes_y_observed` column to filter on.")
+
     top_n = st.slider("Top N (Bayes)", 5, 200, 50)
-    top = filtered.sort_values("bayes_p_one_mean", ascending=False).head(top_n).copy()
+    top = bayes_rows.sort_values("bayes_p_one_mean", ascending=False).head(top_n).copy()
     cols = [
         c
         for c in [
@@ -358,6 +400,8 @@ with tabs[2]:
             "bayes_mu_mean",
             "bayes_mu_hdi_low",
             "bayes_mu_hdi_high",
+            "bayes_y_observed",
+            "bayes_y_censored_lower_bound",
             "uk_distance_km",
         ]
         if c in top.columns
@@ -385,6 +429,8 @@ with tabs[2]:
                     "bayes_lp_mean",
                     "bayes_label",
                     "bayes_y_observed",
+                    "bayes_y_censored_lower_bound",
+                    "bayes_is_censored",
                 ]
                 if k in r
             }

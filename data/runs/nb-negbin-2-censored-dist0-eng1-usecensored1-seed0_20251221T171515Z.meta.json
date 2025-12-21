@@ -1,0 +1,20 @@
+{
+  "draws": 2000,
+  "hdi_prob": 0.9,
+  "kind": "bayes_run",
+  "likelihood": "negbin",
+  "meta_version": 1,
+  "run_id": "nb-negbin-2-censored-dist0-eng1-usecensored1-seed0_20251221T171515Z",
+  "run_label": "nb-negbin-2-censored-dist0_eng1-usecensored1-seed0",
+  "seed": 0,
+  "source": "notebook",
+  "target_accept": 0.95,
+  "timestamp_utc": "20251221T171515Z",
+  "tune": 2000,
+  "use_censoring": true,
+  "variant": {
+    "tag": "dist0_eng1",
+    "use_distance": false,
+    "use_english": true
+  }
+}

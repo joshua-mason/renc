@@ -11,6 +11,7 @@ import pandas as pd
 from src.bayes_model import BayesFitConfig, fit_poisson_glm_p_one
 from src.config import (
     COUNTRIES_LISTENS,
+    CENSORED_COUNTRIES_LOWER_BOUNDS,
     NUMBER_OF_COUNTRIES_WITH_LISTENS,
     TOTAL_NUMBER_OF_COUNTRIES_WITH_ONE_LISTEN,
 )
@@ -98,6 +99,8 @@ def run_bayes(
     *,
     use_distance: bool,
     use_english: bool,
+    use_censoring: bool = False,
+    likelihood: str = "poisson",
     draws: int,
     tune: int,
     target_accept: float,
@@ -108,12 +111,16 @@ def run_bayes(
     return fit_poisson_glm_p_one(
         df,
         country_listens=COUNTRIES_LISTENS,
+        censored_country_lower_bounds=(
+            CENSORED_COUNTRIES_LOWER_BOUNDS if bool(use_censoring) else None
+        ),
         number_of_countries_with_listens=int(NUMBER_OF_COUNTRIES_WITH_LISTENS),
         number_of_countries_with_one_listen=int(
             TOTAL_NUMBER_OF_COUNTRIES_WITH_ONE_LISTEN
         ),
         use_distance=bool(use_distance),
         use_english=bool(use_english),
+        likelihood=str(likelihood),
         config=BayesFitConfig(
             draws=int(draws),
             tune=int(tune),

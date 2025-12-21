@@ -200,3 +200,39 @@ United States (7%)
 Canada (2%)
 New Zealand (2%)
 * I kinda wanna refactor the code, maybe start from scratch cause I thihnk it is a bit of a mess at the moment tbh, we probably should consider the way we want the "data pipeline" to work and how we want to view it more holistically than me just tagging on ideasz as we go, now we have something working
+
+### 2025-12-21 — Censored supervision + why Poisson can be brittle here
+- **Observation**: Adding many censored “definitely multi” countries (Y ≥ 2) caused catastrophic sampler diagnostics (huge divergences, rhat ~ 3–4, ess ~ single digits). With only a couple censored countries (e.g. AUS/IRL) diagnostics could recover.
+- **Interpretation**: The issue is not “model complexity” (still a small GLM), it’s **posterior geometry** when we add hard event-likelihood constraints on top of sparse labels and aggregate constraints.
+- **Implementation note**: For lower bounds, PyMC’s built-in `pm.Censored` works and matches semantics:
+  - using `upper=k` and `observed=k` contributes \(\\log P(Y \\ge k)\).
+- **Next step decision**: Add a **Negative Binomial** likelihood option (over-dispersion) and test Poisson vs NegBin under censoring; NegBin is often better for heavy-tailed count data like “some countries have 200+, others 0/1”.
+- **Practical workflow**:
+  - treat sampling diagnostics (divergences, rhat, ess) as a hard gate: don’t interpret runs that fail.
+  - grow censored country lists gradually (start with a tiny set; expand only if diagnostics remain good).
+
+### 2025-12-21 — Feature ablations (distance × English) + seed stability
+- **Goal**: sanity-check whether adding covariates (distance-from-UK, English proficiency) improves rankings / posterior behavior, and whether results are stable across random seeds.
+- **Tooling**:
+  - A notebook runner that executes a small grid of runs (distance on/off × english on/off) across multiple seeds and writes artifacts to `data/runs/`.
+  - A stability check that compares seed-to-seed agreement using rank correlation + top-N overlap.
+- **Finding**: seed-to-seed agreement is only meaningful when sampler diagnostics are good; bad runs should be discarded rather than averaged.
+- **Decision (current)**: distance-from-UK is not currently delivering value (and can feel misaligned with “resident listeners” vs “tourist listeners”), so we should deprioritize it as a headline feature unless it becomes clearly helpful under better supervision / better likelihoods.
+
+### 2025-12-21 — New covariate: English proficiency (% speakers) + ablation
+- **Data**: add `english_speakers_pct` from `raw/wikipedia_eng_lng_pop.csv`.
+- **Modeling**: include as an optional Bayes covariate (`english_speakers_rate`), with an ablation flag (`--no-english`).
+- **Missingness policy**: impute missing feature values using **training means** at fit time (so the model can still run and the missingness is visible in the dataset explorer).
+
+### 2025-12-21 — Streamlit UX improvements for run comparison + debugging
+- **Run selection**: switch run pickers from dropdowns to a **filter + clickable list** (radio), because runs accumulate quickly and dropdowns become unusable.
+- **Bayes tab debugging**: add an option to show **only observed / training rows** (countries with `bayes_y_observed`) so we can quickly sanity-check how the model treats known data.
+
+### 2025-12-21 — Calibration diagnostics + Negative Binomial option
+- **Observation**: Under a heavy-tailed “real world” counts process (some countries have hundreds/thousands), Poisson can be too brittle; Negative Binomial (over-dispersed) can yield more plausible `P(Y=1)` ranges (e.g. avoiding 20–30% peaks) and improve sampling stability under censoring.
+- **Implementation**:
+  - Add `--likelihood poisson|negbin` to Bayes runs.
+  - Surface `bayes_nb_alpha_mean` (dispersion) in run metadata / Streamlit.
+  - Add simple calibration summary fields to every run CSV:
+    - targets: `bayes_target_total_nonzero/zero/one/multi` (e.g. total countries minus 95)
+    - implied expectations (from posterior means): `bayes_expected_total_nonzero_mean`, `..._one_mean`, `..._zero_mean`, `..._multi_mean`

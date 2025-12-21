@@ -109,6 +109,8 @@ async def _generate_bayes_run(
     dataset_csv: str | None = None,
     use_distance: bool = True,
     use_english: bool = True,
+    use_censoring: bool = False,
+    likelihood: str = "poisson",
 ) -> RunResult:
     df = await build_dataset(
         DatasetBuildConfig(
@@ -130,6 +132,8 @@ async def _generate_bayes_run(
         df,
         use_distance=bool(use_distance),
         use_english=bool(use_english),
+        use_censoring=bool(use_censoring),
+        likelihood=str(likelihood),
         draws=int(draws),
         tune=int(tune),
         target_accept=float(target_accept),
@@ -166,6 +170,8 @@ async def _generate_bayes_run(
             "dataset_csv": dataset_csv,
             "use_distance": bool(use_distance),
             "use_english": bool(use_english),
+            "use_censoring": bool(use_censoring),
+            "likelihood": str(likelihood),
             "exclude_alpha3": ["GBR"],
             "heuristic": {
                 "use_language_factor": bool(use_language_factor),
@@ -583,6 +589,17 @@ def main() -> None:
         help="Disable English speakers % covariate in the Bayesian model.",
     )
     bayes_run.add_argument(
+        "--use-censoring",
+        action="store_true",
+        help="Enable censored supervision (lower bounds) from config.CENSORED_COUNTRIES_LOWER_BOUNDS.",
+    )
+    bayes_run.add_argument(
+        "--likelihood",
+        default="poisson",
+        choices=["poisson", "negbin"],
+        help="Count likelihood for Bayes model. 'negbin' (Negative Binomial) can be more robust for heavy-tailed counts.",
+    )
+    bayes_run.add_argument(
         "--launch",
         action="store_true",
         help="Launch Streamlit after generating, preloading this run",
@@ -691,6 +708,8 @@ def main() -> None:
                 dataset_csv=(str(args.dataset_csv) if args.dataset_csv else None),
                 use_distance=(not bool(args.no_distance)),
                 use_english=(not bool(args.no_english)),
+                use_censoring=bool(args.use_censoring),
+                likelihood=str(args.likelihood),
             )
         )
         print(result.csv_path)
