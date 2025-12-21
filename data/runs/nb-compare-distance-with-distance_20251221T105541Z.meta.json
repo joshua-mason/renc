@@ -1,0 +1,9 @@
+{
+  "kind": "bayes_run",
+  "meta_version": 1,
+  "run_id": "nb-compare-distance-with-distance_20251221T105541Z",
+  "run_label": "nb-compare-distance-with-distance",
+  "source": "notebook",
+  "timestamp_utc": "20251221T105541Z",
+  "use_distance": true
+}

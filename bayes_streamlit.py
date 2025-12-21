@@ -1,6 +1,7 @@
 import argparse
 import glob
 import io
+import json
 import os
 import re
 from typing import Optional
@@ -9,9 +10,13 @@ import altair as alt
 import numpy as np
 import pandas as pd
 import streamlit as st
+import pydeck as pdk
+
+from src.schema import BAYES_RUN_SCHEMA, validate_frame
 
 DEFAULT_CSV_PATH = "out.csv"
-RUNS_DIRS = ["data/runs", "runs"]
+# Search both “new” and legacy run dirs, plus any notebook-produced artifacts.
+RUNS_DIRS = ["data/runs", "runs", "notebooks/data/runs"]
 
 
 @st.cache_data
@@ -65,6 +70,26 @@ def _label_for_path(path: str) -> str:
     return base
 
 
+def _meta_path_for_csv_path(csv_path: str) -> str:
+    base, _ext = os.path.splitext(csv_path)
+    return f"{base}.meta.json"
+
+
+def _load_meta_for_loaded_from(loaded_from: str) -> dict | None:
+    if not loaded_from or loaded_from.startswith("upload:"):
+        return None
+    if not os.path.exists(loaded_from):
+        return None
+    mp = _meta_path_for_csv_path(loaded_from)
+    if not os.path.exists(mp):
+        return None
+    try:
+        with open(mp, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
 st.set_page_config(page_title="renc bayes viewer", layout="wide")
 st.title("renc: bayesian run viewer")
 st.caption(
@@ -110,6 +135,14 @@ st.sidebar.success(f"Loaded: {loaded_from}")
 if df is None:
     st.stop()
 
+st.sidebar.markdown("---")
+st.sidebar.subheader("Schema check")
+schema_report = validate_frame(df, BAYES_RUN_SCHEMA)
+if schema_report["ok"]:
+    st.sidebar.success(f"OK: {schema_report['schema']}")
+else:
+    st.sidebar.error(f"Missing required columns: {schema_report['missing_required']}")
+
 if "bayes_p_one_mean" not in df.columns:
     st.error(
         "This CSV does not look like a bayes-run output (missing `bayes_p_one_mean`). "
@@ -136,74 +169,9 @@ for c in [
 
 country_col = "country_name" if "country_name" in df.columns else "alpha_3"
 
-st.subheader("What this model is doing (the story)")
-st.markdown(
-    """
-We model *listen counts* per country \(Y_i\) using a Poisson regression:
-
-- \(Y_i \\sim \\text{Poisson}(\\mu_i)\)
-- \\(\\log \\mu_i = \\alpha + \\beta^T x_i\\)
-
-Then we derive the probability you actually care about:
-
-- \(P(Y_i=1 \\mid \\mu_i) = \\mu_i e^{-\\mu_i}\)
-
-So countries with \\(\\mu \\approx 1\\) are the “sweet spot” for single listens.
-"""
-)
-
-with st.expander(
-    "Why the model can still feel surprising (aggregate constraints + incomplete counts)",
-    expanded=False,
-):
-    st.markdown(
-        """
-We only supervise the model with:
-
-- the per-country `COUNTRIES_LISTENS` counts you’ve verified (including explicit 0s)
-- the aggregate `NUMBER_OF_COUNTRIES_WITH_LISTENS` (how many countries had any listens at all)
-
-Because we don’t know *which* countries are in the remaining “has listens” set, we add a soft aggregate constraint:
-\(\\sum_i P(Y_i > 0)\\) should match `NUMBER_OF_COUNTRIES_WITH_LISTENS` (after accounting for observed nonzero countries).
-
-**Why it can feel unintuitive**: with few observed countries, many different coefficient settings can satisfy the aggregate
-constraint while still fitting the observed counts.
-
-**Mitigation**: keep adding verified 0/1/large counts. Each new observed country collapses a lot of uncertainty.
-"""
-    )
-
-st.subheader("Run summary + diagnostics")
-meta_cols = [
-    "run_label",
-    "run_id",
-    "bayes_draws_cli",
-    "bayes_tune_cli",
-    "bayes_target_accept_cli",
-    "bayes_seed_cli",
-    "bayes_hdi_prob_cli",
-    "bayes_rhat_max",
-    "bayes_ess_bulk_min",
-    "bayes_train_n",
-    "bayes_train_n_one",
-    "bayes_train_n_multi",
-    "bayes_train_n_zero",
-    "bayes_number_of_countries_with_listens",
-    "bayes_aggregate_sigma",
-    "bayes_number_of_countries_with_one_listen",
-    "bayes_aggregate_one_sigma",
-    "bayes_use_distance",
-]
-meta = {
-    c: df[c].dropna().iloc[0]
-    for c in meta_cols
-    if c in df.columns and df[c].notna().any()
-}
-st.json({"loaded_from": loaded_from, **meta})
-
 st.sidebar.markdown("---")
 st.sidebar.subheader("Filters")
-search = st.sidebar.text_input("Search country", value="", placeholder="e.g. Vietnam")
+search = st.sidebar.text_input("Search country", value="", placeholder="e.g. France")
 unknown_only = (
     st.sidebar.checkbox("Only bayes_label=unknown", value=True)
     if "bayes_label" in df.columns
@@ -220,275 +188,638 @@ if search.strip():
 if unknown_only and "bayes_label" in filtered.columns:
     filtered = filtered[filtered["bayes_label"] == "unknown"]
 
-st.subheader("Top candidates (Bayes)")
-top_n = st.slider("Top N", 5, 100, 25)
-top = filtered.sort_values("bayes_p_one_mean", ascending=False).head(top_n).copy()
-cols = [
-    c
-    for c in [
-        "bayes_rank",
-        country_col,
-        "alpha_3",
-        "bayes_label",
-        "bayes_p_one_mean",
-        "bayes_p_one_hdi_low",
-        "bayes_p_one_hdi_high",
-        "bayes_mu_mean",
-        "bayes_mu_hdi_low",
-        "bayes_mu_hdi_high",
-        "model_rank",
-        "total_score",
-    ]
-    if c in top.columns
-]
-st.dataframe(top[cols], width="stretch", height=420)
+tabs = st.tabs(["Summary", "Data", "Bayes", "Heuristic", "Compare", "Map"])
 
-st.subheader("How the training data (labels) looks")
-if "bayes_label" in df.columns:
-    label_counts = (
-        df["bayes_label"]
-        .fillna("unknown")
-        .astype(str)
-        .value_counts(dropna=False)
-        .rename_axis("bayes_label")
-        .reset_index(name="rows")
+with tabs[0]:
+    st.subheader("Summary")
+    st.markdown(
+        """
+We model per-country listen counts \(Y_i\) with a Poisson GLM, and derive:
+\(P(Y_i=1)=\\mu_i e^{-\\mu_i}\\).
+
+Use this viewer to:
+- shortlist candidates
+- explain why a country looks likely/unlikely
+- compare runs (distance on/off, etc.)
+"""
     )
-    st.dataframe(label_counts, width="stretch", height=220)
+    meta_cols = [
+        "run_label",
+        "run_id",
+        "bayes_use_distance",
+        "bayes_train_n",
+        "bayes_train_n_one",
+        "bayes_train_n_multi",
+        "bayes_train_n_zero",
+        "bayes_number_of_countries_with_listens",
+        "bayes_number_of_countries_with_one_listen",
+        "bayes_rhat_max",
+        "bayes_ess_bulk_min",
+    ]
+    meta = {
+        c: df[c].dropna().iloc[0]
+        for c in meta_cols
+        if c in df.columns and df[c].notna().any()
+    }
+    sidecar_meta = _load_meta_for_loaded_from(loaded_from)
+    st.json({"loaded_from": loaded_from, **meta})
+    if sidecar_meta is not None:
+        with st.expander("Run metadata (sidecar JSON)", expanded=False):
+            st.json(sidecar_meta)
 
-if "bayes_y_observed" in df.columns:
-    train_rows = df[df["bayes_y_observed"].notna()].copy()
-    if not train_rows.empty:
-        train_rows["bayes_y_observed"] = pd.to_numeric(
-            train_rows["bayes_y_observed"], errors="coerce"
-        )
-        st.caption("Training rows (what the model was actually fit on)")
-        show = train_rows.sort_values(["bayes_y_observed"], ascending=[False]).copy()
-        keep = [
-            c
-            for c in [country_col, "alpha_3", "bayes_label", "bayes_y_observed"]
-            if c in show.columns
+with tabs[1]:
+    st.subheader("Data explorer")
+    # Keep this tab simple: show inputs, and include observed listens (if present)
+    # as a column so you can sort/filter directly in the dataframe UI.
+    if "bayes_y_observed" in df.columns:
+        df["bayes_y_observed"] = pd.to_numeric(df["bayes_y_observed"], errors="coerce")
+
+    # The sidebar filter defaults to bayes_label=unknown, which hides training rows.
+    # For data inspection, default to showing the full dataset.
+    respect_sidebar = st.checkbox("Respect sidebar filters on this tab", value=False)
+    data_rows = filtered if respect_sidebar else df
+
+    input_cols = [
+        c
+        for c in [
+            country_col,
+            "alpha_3",
+            "bayes_y_observed",
+            "population",
+            "internet_usage_pct",
+            "internet_usage_record_year",
+            "latitude",
+            "longitude",
+            "uk_distance_km",
+            "languages",
         ]
-        st.dataframe(show[keep], width="stretch", height=260)
-
-st.subheader("Input data explorer (features + missingness)")
-input_cols = [
-    c
-    for c in [
-        country_col,
-        "alpha_3",
-        "population",
-        "internet_usage_pct",
-        "internet_usage_record_year",
-        "latitude",
-        "longitude",
-        "uk_distance_km",
-        "uk_visits_number",
-        "uk_visits_period",
-        "languages",
+        if c in df.columns
     ]
-    if c in df.columns
-]
-if input_cols:
-    miss = (
-        df[input_cols]
-        .isna()
-        .mean()
-        .sort_values(ascending=False)
-        .rename("missing_rate")
-        .reset_index()
-        .rename(columns={"index": "column"})
-    )
-    left, right = st.columns(2)
-    with left:
-        st.caption("Missingness (fraction of rows missing)")
-        st.dataframe(miss, width="stretch", height=320)
-    with right:
-        st.caption("Raw input rows (filtered)")
-        st.dataframe(filtered[input_cols].head(200), width="stretch", height=320)
-else:
-    st.info("No raw input columns found in this CSV.")
+    if input_cols:
+        miss = (
+            df[input_cols]
+            .isna()
+            .mean()
+            .sort_values(ascending=False)
+            .rename("missing_rate")
+            .reset_index()
+            .rename(columns={"index": "column"})
+        )
+        left, right = st.columns(2)
+        with left:
+            st.caption("Missingness")
+            st.dataframe(miss, width="stretch", height=320)
+        with right:
+            st.caption("Rows (filtered)")
+            # Streamlit sorting can behave oddly with NaN vs 0. Pre-sort so any observed
+            # values come first, then sort by the observed count (desc).
+            view = data_rows[input_cols].copy()
+            if "bayes_y_observed" in view.columns:
+                y = pd.to_numeric(view["bayes_y_observed"], errors="coerce")
+                view["_has_observed"] = y.notna()
+                view["_y_sort"] = y.fillna(-1.0)
+                view = view.sort_values(
+                    by=["_has_observed", "_y_sort", country_col],
+                    ascending=[False, False, True],
+                    na_position="last",
+                ).drop(columns=["_has_observed", "_y_sort"], errors="ignore")
 
-st.subheader("What the model learned (coefficients)")
-beta_rows = []
-if "bayes_alpha_mean" in df.columns:
-    beta_rows.append(
-        {
-            "param": "alpha (intercept)",
-            "mean": float(df["bayes_alpha_mean"].dropna().iloc[0]),
-            "hdi_low": (
-                float(df["bayes_alpha_hdi_low"].dropna().iloc[0])
-                if "bayes_alpha_hdi_low" in df.columns
-                and df["bayes_alpha_hdi_low"].notna().any()
-                else np.nan
-            ),
-            "hdi_high": (
-                float(df["bayes_alpha_hdi_high"].dropna().iloc[0])
-                if "bayes_alpha_hdi_high" in df.columns
-                and df["bayes_alpha_hdi_high"].notna().any()
-                else np.nan
-            ),
-        }
-    )
+            st.dataframe(view.head(300), width="stretch", height=320)
+    else:
+        st.info("No raw input columns found in this CSV.")
 
-for base in ["log_population", "internet_rate", "log1p_uk_distance_km"]:
-    mean_col = f"bayes_beta_{base}_mean"
-    if mean_col in df.columns and df[mean_col].notna().any():
+with tabs[2]:
+    st.subheader("Bayes results")
+    top_n = st.slider("Top N (Bayes)", 5, 200, 50)
+    top = filtered.sort_values("bayes_p_one_mean", ascending=False).head(top_n).copy()
+    cols = [
+        c
+        for c in [
+            "bayes_rank",
+            country_col,
+            "alpha_3",
+            "bayes_label",
+            "bayes_p_one_mean",
+            "bayes_p_one_hdi_low",
+            "bayes_p_one_hdi_high",
+            "bayes_mu_mean",
+            "bayes_mu_hdi_low",
+            "bayes_mu_hdi_high",
+            "uk_distance_km",
+        ]
+        if c in top.columns
+    ]
+    st.dataframe(top[cols], width="stretch", height=420)
+
+    st.subheader("Explain a country")
+    options = filtered[country_col].astype(str).fillna("").unique().tolist()
+    if options:
+        pick = st.selectbox("Country", options=options, index=0)
+        row = filtered.loc[filtered[country_col].astype(str) == str(pick)]
+        if not row.empty:
+            r = row.iloc[0].to_dict()
+            show = {
+                k: r.get(k)
+                for k in [
+                    "country_name",
+                    "alpha_3",
+                    "population",
+                    "internet_usage_pct",
+                    "uk_distance_km",
+                    "bayes_mu_mean",
+                    "bayes_p_one_mean",
+                    "bayes_lp_mean",
+                    "bayes_label",
+                    "bayes_y_observed",
+                ]
+                if k in r
+            }
+            st.json(show)
+    else:
+        st.info("No countries to select (filtered dataset empty).")
+
+    st.subheader("Coefficients")
+    beta_rows = []
+    if "bayes_alpha_mean" in df.columns and df["bayes_alpha_mean"].notna().any():
         beta_rows.append(
             {
-                "param": f"beta[{base}]",
-                "mean": float(df[mean_col].dropna().iloc[0]),
+                "param": "alpha",
+                "mean": float(df["bayes_alpha_mean"].dropna().iloc[0]),
                 "hdi_low": (
-                    float(df[f"bayes_beta_{base}_hdi_low"].dropna().iloc[0])
-                    if f"bayes_beta_{base}_hdi_low" in df.columns
-                    and df[f"bayes_beta_{base}_hdi_low"].notna().any()
+                    float(df["bayes_alpha_hdi_low"].dropna().iloc[0])
+                    if "bayes_alpha_hdi_low" in df.columns
+                    and df["bayes_alpha_hdi_low"].notna().any()
                     else np.nan
                 ),
                 "hdi_high": (
-                    float(df[f"bayes_beta_{base}_hdi_high"].dropna().iloc[0])
-                    if f"bayes_beta_{base}_hdi_high" in df.columns
-                    and df[f"bayes_beta_{base}_hdi_high"].notna().any()
+                    float(df["bayes_alpha_hdi_high"].dropna().iloc[0])
+                    if "bayes_alpha_hdi_high" in df.columns
+                    and df["bayes_alpha_hdi_high"].notna().any()
                     else np.nan
                 ),
             }
         )
-
-if beta_rows:
-    st.dataframe(pd.DataFrame(beta_rows), width="stretch", height=240)
-    st.caption(
-        "Interpretation: coefficients are on standardized features. Positive beta increases log(mu), "
-        "making higher counts more likely; single-listen probability peaks near mu≈1."
-    )
-else:
-    st.info("No coefficient summaries found in this CSV.")
-
-st.subheader("Charts")
-
-chart_df = filtered[[country_col, "bayes_p_one_mean"]].dropna().copy()
-chart_df = chart_df.rename(columns={country_col: "country"})
-chart_df["bayes_p_one_mean"] = pd.to_numeric(
-    chart_df["bayes_p_one_mean"], errors="coerce"
-)
-chart_df = chart_df.dropna(subset=["bayes_p_one_mean"])
-
-hist_bins = st.slider("Histogram bins", 10, 80, 30)
-hist = chart_df.copy()
-hist["bin"] = pd.cut(hist["bayes_p_one_mean"], bins=hist_bins)
-counts = hist.groupby("bin", observed=True).size().reset_index(name="count")
-counts["bin"] = counts["bin"].astype(str)
-st.bar_chart(counts, x="bin", y="count", height=260)
-
-if "model_rank" in filtered.columns:
-    tmp = filtered[[country_col, "model_rank", "bayes_p_one_mean"]].dropna().copy()
-    tmp = tmp.rename(columns={country_col: "country"})
-    tmp["model_rank"] = pd.to_numeric(tmp["model_rank"], errors="coerce")
-    tmp["bayes_p_one_mean"] = pd.to_numeric(tmp["bayes_p_one_mean"], errors="coerce")
-    tmp = tmp.dropna(subset=["model_rank", "bayes_p_one_mean"])
-    scat = (
-        alt.Chart(tmp)
-        .mark_circle()
-        .encode(
-            x=alt.X("model_rank:Q", title="heuristic model_rank"),
-            y=alt.Y("bayes_p_one_mean:Q", title="Bayes P(listens=1) (mean)"),
-            tooltip=[
-                alt.Tooltip("country:N", title="country"),
-                alt.Tooltip("model_rank:Q", title="heuristic_rank"),
-                alt.Tooltip("bayes_p_one_mean:Q", title="p_one_mean"),
-            ],
-        )
-        .properties(height=320)
-        .interactive()
-    )
-    st.altair_chart(scat, width="stretch")
-
-if "uk_distance_km" in filtered.columns:
-    st.subheader("Distance diagnostics (if distance columns exist)")
-    tmp = filtered[
-        [country_col, "uk_distance_km", "bayes_p_one_mean", "bayes_mu_mean"]
-    ].copy()
-    tmp = tmp.rename(columns={country_col: "country"})
-    tmp["uk_distance_km"] = pd.to_numeric(tmp["uk_distance_km"], errors="coerce")
-    tmp["bayes_p_one_mean"] = pd.to_numeric(tmp["bayes_p_one_mean"], errors="coerce")
-    tmp["bayes_mu_mean"] = pd.to_numeric(tmp["bayes_mu_mean"], errors="coerce")
-    tmp = tmp.dropna(subset=["uk_distance_km", "bayes_p_one_mean", "bayes_mu_mean"])
-    tmp["uk_distance_km_plus1"] = tmp["uk_distance_km"] + 1.0
-
-    left, right = st.columns(2)
-    with left:
-        st.caption("P(Y=1) vs distance from UK (log scale on distance)")
-        scat_d = (
-            alt.Chart(tmp)
-            .mark_circle()
-            .encode(
-                x=alt.X(
-                    "uk_distance_km_plus1:Q",
-                    title="distance from UK (km, +1; log scale)",
-                    scale=alt.Scale(type="log"),
-                ),
-                y=alt.Y("bayes_p_one_mean:Q", title="Bayes P(listens=1) (mean)"),
-                tooltip=[
-                    alt.Tooltip("country:N", title="country"),
-                    alt.Tooltip("uk_distance_km:Q", title="uk_distance_km"),
-                    alt.Tooltip("bayes_p_one_mean:Q", title="p_one_mean"),
-                    alt.Tooltip("bayes_mu_mean:Q", title="mu_mean"),
-                ],
+    for base in ["log_population", "internet_rate", "log1p_uk_distance_km"]:
+        mean_col = f"bayes_beta_{base}_mean"
+        if mean_col in df.columns and df[mean_col].notna().any():
+            beta_rows.append(
+                {
+                    "param": f"beta[{base}]",
+                    "mean": float(df[mean_col].dropna().iloc[0]),
+                    "hdi_low": (
+                        float(df[f"bayes_beta_{base}_hdi_low"].dropna().iloc[0])
+                        if f"bayes_beta_{base}_hdi_low" in df.columns
+                        and df[f"bayes_beta_{base}_hdi_low"].notna().any()
+                        else np.nan
+                    ),
+                    "hdi_high": (
+                        float(df[f"bayes_beta_{base}_hdi_high"].dropna().iloc[0])
+                        if f"bayes_beta_{base}_hdi_high" in df.columns
+                        and df[f"bayes_beta_{base}_hdi_high"].notna().any()
+                        else np.nan
+                    ),
+                }
             )
-            .properties(height=320)
-            .interactive()
-        )
-        st.altair_chart(scat_d, width="stretch")
+    if beta_rows:
+        st.dataframe(pd.DataFrame(beta_rows), width="stretch", height=220)
+    else:
+        st.info("No coefficient summaries found in this CSV.")
 
-    with right:
-        st.caption("mu vs distance from UK (log scale on distance)")
-        scat_m = (
-            alt.Chart(tmp)
-            .mark_circle()
-            .encode(
-                x=alt.X(
-                    "uk_distance_km_plus1:Q",
-                    title="distance from UK (km, +1; log scale)",
-                    scale=alt.Scale(type="log"),
-                ),
-                y=alt.Y("bayes_mu_mean:Q", title="Bayes mu (mean)"),
-                tooltip=[
-                    alt.Tooltip("country:N", title="country"),
-                    alt.Tooltip("uk_distance_km:Q", title="uk_distance_km"),
-                    alt.Tooltip("bayes_mu_mean:Q", title="mu_mean"),
-                    alt.Tooltip("bayes_p_one_mean:Q", title="p_one_mean"),
-                ],
-            )
-            .properties(height=320)
-            .interactive()
-        )
-        st.altair_chart(scat_m, width="stretch")
-
-st.markdown("---")
-st.subheader("Debug: feature columns (if present)")
-
-debug_cols = [
-    c
-    for c in [
-        country_col,
-        "uk_distance_km",
-        "bayes_x_log_population",
-        "bayes_x_internet_rate",
-        "bayes_x_log1p_uk_distance_km",
-        "bayes_z_log_population",
-        "bayes_z_internet_rate",
-        "bayes_z_log1p_uk_distance_km",
-        "bayes_lp_mean",
-        "bayes_lp_hdi_low",
-        "bayes_lp_hdi_high",
-        "bayes_mu_mean",
-        "bayes_p_one_mean",
-    ]
-    if c in df.columns
-]
-
-if debug_cols:
-    st.dataframe(
-        filtered.sort_values("bayes_p_one_mean", ascending=False)[debug_cols].head(50),
-        width="stretch",
-        height=420,
+    st.subheader("Distribution")
+    chart_df = filtered[[country_col, "bayes_p_one_mean"]].dropna().copy()
+    chart_df = chart_df.rename(columns={country_col: "country"})
+    chart_df["bayes_p_one_mean"] = pd.to_numeric(
+        chart_df["bayes_p_one_mean"], errors="coerce"
     )
-else:
-    st.info("No debug feature columns present in this CSV yet.")
+    chart_df = chart_df.dropna(subset=["bayes_p_one_mean"])
+    bins = st.slider("Histogram bins", 10, 80, 30)
+    chart_df["bin"] = pd.cut(chart_df["bayes_p_one_mean"], bins=bins)
+    counts = chart_df.groupby("bin", observed=True).size().reset_index(name="count")
+    counts["bin"] = counts["bin"].astype(str)
+    st.bar_chart(counts, x="bin", y="count", height=260)
+
+with tabs[3]:
+    st.subheader("Heuristic results")
+    if "model_rank" not in filtered.columns or "total_score" not in filtered.columns:
+        st.info(
+            "This run CSV does not include heuristic columns (`model_rank`, `total_score`)."
+        )
+    else:
+        cols = [
+            c
+            for c in [
+                country_col,
+                "alpha_3",
+                "model_rank",
+                "total_score",
+                "is_single_listen_candidate",
+            ]
+            if c in filtered.columns
+        ]
+        st.dataframe(
+            filtered.sort_values("model_rank", ascending=True)[cols].head(300),
+            width="stretch",
+            height=520,
+        )
+
+with tabs[4]:
+    st.subheader("Compare runs")
+    st.caption("Pick two run CSVs and compare deltas (rank + P(Y=1)).")
+    all_paths = _available_csv_paths()
+    if len(all_paths) < 2:
+        st.info("Need at least 2 run CSVs in run directories to compare.")
+    else:
+        labels_all = [_label_for_path(p) for p in all_paths]
+        c1, c2 = st.columns(2)
+        with c1:
+            a_label = st.selectbox("Run A", options=labels_all, index=0)
+        with c2:
+            b_label = st.selectbox(
+                "Run B", options=labels_all, index=1 if len(labels_all) > 1 else 0
+            )
+        path_a = all_paths[labels_all.index(a_label)]
+        path_b = all_paths[labels_all.index(b_label)]
+        df_a = load_csv_path(path_a)
+        df_b = load_csv_path(path_b)
+        rep_a = validate_frame(df_a, BAYES_RUN_SCHEMA)
+        rep_b = validate_frame(df_b, BAYES_RUN_SCHEMA)
+        if not rep_a["ok"]:
+            st.warning(f"Run A missing required cols: {rep_a['missing_required']}")
+        if not rep_b["ok"]:
+            st.warning(f"Run B missing required cols: {rep_b['missing_required']}")
+        if "alpha_3" not in df_a.columns or "alpha_3" not in df_b.columns:
+            st.info("Cannot compare: both runs must include `alpha_3`.")
+        else:
+            a = df_a[
+                [
+                    c
+                    for c in [
+                        "alpha_3",
+                        "country_name",
+                        "bayes_rank",
+                        "bayes_p_one_mean",
+                        "bayes_mu_mean",
+                    ]
+                    if c in df_a.columns
+                ]
+            ].copy()
+            b = df_b[
+                [
+                    c
+                    for c in [
+                        "alpha_3",
+                        "country_name",
+                        "bayes_rank",
+                        "bayes_p_one_mean",
+                        "bayes_mu_mean",
+                    ]
+                    if c in df_b.columns
+                ]
+            ].copy()
+            a = a.rename(
+                columns={
+                    "bayes_rank": "rank_a",
+                    "bayes_p_one_mean": "p1_a",
+                    "bayes_mu_mean": "mu_a",
+                    "country_name": "country_name_a",
+                }
+            )
+            b = b.rename(
+                columns={
+                    "bayes_rank": "rank_b",
+                    "bayes_p_one_mean": "p1_b",
+                    "bayes_mu_mean": "mu_b",
+                    "country_name": "country_name_b",
+                }
+            )
+            cmp = pd.merge(a, b, on="alpha_3", how="inner")
+            if "country_name_a" in cmp.columns:
+                cmp["country_name"] = cmp["country_name_a"]
+            elif "country_name_b" in cmp.columns:
+                cmp["country_name"] = cmp["country_name_b"]
+            for c in ["rank_a", "rank_b", "p1_a", "p1_b", "mu_a", "mu_b"]:
+                if c in cmp.columns:
+                    cmp[c] = pd.to_numeric(cmp[c], errors="coerce")
+            if "rank_a" in cmp.columns and "rank_b" in cmp.columns:
+                cmp["delta_rank"] = cmp["rank_b"] - cmp["rank_a"]
+            if "p1_a" in cmp.columns and "p1_b" in cmp.columns:
+                cmp["delta_p1"] = cmp["p1_b"] - cmp["p1_a"]
+            sort_cols = [c for c in ["delta_p1", "delta_rank"] if c in cmp.columns]
+            if not sort_cols:
+                st.info(
+                    "Nothing to sort by yet (need rank/probability columns in both runs)."
+                )
+                show = [
+                    c
+                    for c in [
+                        "country_name",
+                        "alpha_3",
+                        "p1_a",
+                        "p1_b",
+                        "rank_a",
+                        "rank_b",
+                    ]
+                    if c in cmp.columns
+                ]
+                st.dataframe(cmp[show].head(200), width="stretch", height=520)
+            else:
+                sort_by = st.selectbox("Sort by", options=sort_cols, index=0)
+                st.dataframe(
+                    cmp.sort_values(sort_by, ascending=False).head(200)[
+                        [
+                            c
+                            for c in [
+                                "country_name",
+                                "alpha_3",
+                                "p1_a",
+                                "p1_b",
+                                "delta_p1",
+                                "rank_a",
+                                "rank_b",
+                                "delta_rank",
+                            ]
+                            if c in cmp.columns
+                        ]
+                    ],
+                    width="stretch",
+                    height=520,
+                )
+
+with tabs[5]:
+    st.subheader("Map")
+    if not all(c in df.columns for c in ["latitude", "longitude"]):
+        st.info("This run CSV does not include `latitude`/`longitude` columns.")
+    else:
+        tmp = df.copy()
+        tmp["latitude"] = pd.to_numeric(tmp["latitude"], errors="coerce")
+        tmp["longitude"] = pd.to_numeric(tmp["longitude"], errors="coerce")
+        tmp = tmp.dropna(subset=["latitude", "longitude"]).copy()
+
+        if tmp.empty:
+            st.info("No rows with valid lat/lon to plot.")
+        else:
+            st.caption(
+                "Interactive map (PyDeck). Use toggles to overlay: training data, Bayes top-N, heuristic candidates, and your guessed list."
+            )
+
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                show_all = st.checkbox("Show all countries (gray)", value=True)
+                show_training = st.checkbox(
+                    "Show training rows (observed counts)", value=True
+                )
+            with c2:
+                show_bayes_top = st.checkbox("Show Bayes top-N", value=True)
+                bayes_top_n = st.slider("Bayes top N", 5, 200, 50)
+            with c3:
+                show_heur = st.checkbox("Show heuristic candidates", value=False)
+                show_guesses = st.checkbox("Highlight guessed countries", value=True)
+
+            show_data_points = st.checkbox(
+                "Show countries present in COUNTRIES_LISTENS (incl unknown)",
+                value=True,
+            )
+
+            guess_text = ""
+            if show_guesses:
+                guess_text = st.text_area(
+                    "Guessed countries (comma or newline separated)",
+                    value="",
+                    placeholder="France\nPoland\nGermany\n...",
+                    height=90,
+                )
+
+            guess_set = {
+                g.strip().lower()
+                for g in re.split(r"[,\n]+", guess_text or "")
+                if g.strip()
+            }
+
+            tmp["lat"] = tmp["latitude"]
+            tmp["lon"] = tmp["longitude"]
+            tmp["country"] = tmp[country_col].astype(str)
+            tmp["alpha_3_upper"] = (
+                tmp["alpha_3"].astype(str).str.upper()
+                if "alpha_3" in tmp.columns
+                else ""
+            )
+
+            # Training labels from observed counts (if present).
+            is_train = (
+                tmp["bayes_y_observed"].notna()
+                if "bayes_y_observed" in tmp.columns
+                else pd.Series(False, index=tmp.index)
+            )
+            train_y = (
+                pd.to_numeric(tmp["bayes_y_observed"], errors="coerce")
+                if "bayes_y_observed" in tmp.columns
+                else pd.Series(np.nan, index=tmp.index)
+            )
+            is_train_one = is_train & (train_y == 1)
+            is_train_zero = is_train & (train_y == 0)
+            is_train_multi = is_train & (train_y >= 2)
+
+            is_bayes_top = pd.Series(False, index=tmp.index)
+            if show_bayes_top and "bayes_rank" in tmp.columns:
+                r = pd.to_numeric(tmp["bayes_rank"], errors="coerce")
+                is_bayes_top = r.notna() & (r <= float(bayes_top_n))
+
+            is_heur_cand = pd.Series(False, index=tmp.index)
+            if show_heur and "is_single_listen_candidate" in tmp.columns:
+                is_heur_cand = tmp["is_single_listen_candidate"] == True  # noqa: E712
+
+            is_guess = pd.Series(False, index=tmp.index)
+            if guess_set:
+                is_guess = tmp["country"].astype(str).str.lower().isin(guess_set)
+
+            # Colors (RGBA)
+            COL_ALL = [140, 140, 140, 40]
+            COL_TRAIN_ZERO = [239, 68, 68, 210]  # red
+            COL_TRAIN_ONE = [16, 185, 129, 230]  # green
+            COL_TRAIN_MULTI = [245, 158, 11, 230]  # amber
+            COL_BAYES_TOP = [59, 130, 246, 210]  # blue
+            COL_HEUR = [168, 85, 247, 210]  # purple
+            COL_GUESS = [236, 72, 153, 235]  # pink
+            COL_DATA = [34, 211, 238, 220]  # cyan
+
+            radius_mode = st.radio(
+                "Point sizing",
+                options=["constant", "constant (big)", "by P(Y=1)", "by mu"],
+                horizontal=True,
+                index=1,
+            )
+
+            p1 = (
+                pd.to_numeric(tmp.get("bayes_p_one_mean"), errors="coerce")
+                if "bayes_p_one_mean" in tmp.columns
+                else pd.Series(np.nan, index=tmp.index)
+            )
+            mu = (
+                pd.to_numeric(tmp.get("bayes_mu_mean"), errors="coerce")
+                if "bayes_mu_mean" in tmp.columns
+                else pd.Series(np.nan, index=tmp.index)
+            )
+
+            if radius_mode == "by P(Y=1)":
+                r = (p1.fillna(0.0).clip(lower=0.0, upper=0.37) / 0.37) ** 0.6
+                tmp["radius_m"] = (8000 + 52000 * r).astype(float)
+            elif radius_mode == "by mu":
+                rr = np.log1p(mu.fillna(0.0).clip(lower=0.0))
+                rr = (rr - float(rr.min())) / (float(rr.max()) - float(rr.min()) + 1e-9)
+                tmp["radius_m"] = (8000 + 52000 * (rr**0.7)).astype(float)
+            elif radius_mode == "constant (big)":
+                tmp["radius_m"] = 52000.0
+            else:
+                tmp["radius_m"] = 18000.0
+
+            size_scale = st.slider("Size scale", 0.5, 3.0, 1.5, 0.1)
+            tmp["radius_m"] = tmp["radius_m"] * float(size_scale)
+
+            tooltip_cols = [
+                "country",
+                "alpha_3_upper",
+                "bayes_rank",
+                "bayes_p_one_mean",
+                "bayes_mu_mean",
+                "uk_distance_km",
+                "bayes_y_observed",
+                "model_rank",
+                "total_score",
+            ]
+            tooltip_cols = [
+                c
+                for c in tooltip_cols
+                if c in tmp.columns or c in ["country", "alpha_3_upper"]
+            ]
+            tooltip = {
+                "html": "<br/>".join([f"<b>{c}</b>: {{{c}}}" for c in tooltip_cols]),
+                "style": {"backgroundColor": "rgba(20,20,20,0.85)", "color": "white"},
+            }
+
+            layers: list[pdk.Layer] = []
+
+            if show_all:
+                layers.append(
+                    pdk.Layer(
+                        "ScatterplotLayer",
+                        data=tmp,
+                        get_position="[lon, lat]",
+                        get_radius="radius_m",
+                        get_fill_color=COL_ALL,
+                        pickable=False,
+                        stroked=False,
+                    )
+                )
+
+            if show_training and is_train.any():
+                for mask, color in [
+                    (is_train_zero, COL_TRAIN_ZERO),
+                    (is_train_one, COL_TRAIN_ONE),
+                    (is_train_multi, COL_TRAIN_MULTI),
+                ]:
+                    sub = tmp.loc[mask].copy()
+                    if sub.empty:
+                        continue
+                    layers.append(
+                        pdk.Layer(
+                            "ScatterplotLayer",
+                            data=sub,
+                            get_position="[lon, lat]",
+                            get_radius="radius_m",
+                            get_fill_color=color,
+                            pickable=True,
+                            stroked=True,
+                            get_line_color=[0, 0, 0, 180],
+                            line_width_min_pixels=1,
+                        )
+                    )
+
+            if show_data_points and "bayes_in_country_listens_map" in tmp.columns:
+                mask = tmp["bayes_in_country_listens_map"] == True  # noqa: E712
+                sub = tmp.loc[mask].copy()
+                if not sub.empty:
+                    layers.append(
+                        pdk.Layer(
+                            "ScatterplotLayer",
+                            data=sub,
+                            get_position="[lon, lat]",
+                            get_radius="radius_m",
+                            get_fill_color=COL_DATA,
+                            pickable=True,
+                            stroked=True,
+                            get_line_color=[0, 0, 0, 220],
+                            line_width_min_pixels=1,
+                        )
+                    )
+
+            if show_bayes_top and is_bayes_top.any():
+                sub = tmp.loc[is_bayes_top].copy()
+                layers.append(
+                    pdk.Layer(
+                        "ScatterplotLayer",
+                        data=sub,
+                        get_position="[lon, lat]",
+                        get_radius="radius_m",
+                        get_fill_color=COL_BAYES_TOP,
+                        pickable=True,
+                        stroked=True,
+                        get_line_color=[0, 0, 0, 200],
+                        line_width_min_pixels=1,
+                    )
+                )
+
+            if show_heur and is_heur_cand.any():
+                sub = tmp.loc[is_heur_cand].copy()
+                layers.append(
+                    pdk.Layer(
+                        "ScatterplotLayer",
+                        data=sub,
+                        get_position="[lon, lat]",
+                        get_radius="radius_m",
+                        get_fill_color=COL_HEUR,
+                        pickable=True,
+                        stroked=True,
+                        get_line_color=[0, 0, 0, 200],
+                        line_width_min_pixels=1,
+                    )
+                )
+
+            if show_guesses and is_guess.any():
+                sub = tmp.loc[is_guess].copy()
+                sub["radius_m"] = sub["radius_m"] * 1.35
+                layers.append(
+                    pdk.Layer(
+                        "ScatterplotLayer",
+                        data=sub,
+                        get_position="[lon, lat]",
+                        get_radius="radius_m",
+                        get_fill_color=COL_GUESS,
+                        pickable=True,
+                        stroked=True,
+                        get_line_color=[0, 0, 0, 240],
+                        line_width_min_pixels=2,
+                    )
+                )
+
+            view_state = pdk.ViewState(latitude=52.0, longitude=5.0, zoom=2.2, pitch=0)
+            st.pydeck_chart(
+                pdk.Deck(
+                    layers=layers,
+                    initial_view_state=view_state,
+                    tooltip=tooltip,
+                    map_style=None,
+                ),
+                use_container_width=True,
+            )
+
+            with st.expander("Legend", expanded=False):
+                st.markdown(
+                    "- **Gray**: all countries\n"
+                    "- **Green**: training (Y=1)\n"
+                    "- **Red**: training (Y=0)\n"
+                    "- **Amber**: training (Y>=2)\n"
+                    "- **Cyan**: present in COUNTRIES_LISTENS (incl unknown)\n"
+                    "- **Blue**: Bayes top-N\n"
+                    "- **Purple**: heuristic candidate zone\n"
+                    "- **Pink**: guessed countries (pasted list)\n"
+                )

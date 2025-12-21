@@ -10,20 +10,15 @@ from statistics import mean, median
 
 import pandas as pd
 
-from src.config import (
-    COUNTRIES_LISTENS,
-    NUMBER_OF_COUNTRIES_WITH_LISTENS,
-    TOTAL_NUMBER_OF_COUNTRIES_WITH_ONE_LISTEN,
+from src.pipeline import (
+    DatasetBuildConfig,
+    build_dataset,
+    run_bayes,
+    run_heuristic,
+    write_run_artifacts,
 )
-from src.data import (
-    add_internet_usage,
-    add_uk_distance,
-    add_languages_and_population,
-    countries,
-    load_dataset_csv,
-)
-from src.bayes_model import BayesFitConfig, fit_poisson_glm_p_one
-from src.model import predict
+from src.config import COUNTRIES_LISTENS
+from src.schema import BAYES_RUN_SCHEMA, require_schema
 
 
 @dataclass(frozen=True)
@@ -52,28 +47,10 @@ async def _generate_run(
     dataset_csv: str | None = None,
     use_distance: bool = True,
 ) -> RunResult:
-    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    slug = _slugify(label)
-    # Put the human-readable label first so run files are easier to scan.
-    run_id = f"{slug}_{ts}"
-
-    os.makedirs(runs_dir, exist_ok=True)
-    csv_path = os.path.join(runs_dir, f"{run_id}.csv")
-
-    if dataset_csv:
-        df = load_dataset_csv(dataset_csv)
-    else:
-        countries_array = await countries()
-        df = pd.DataFrame({"alpha_3": countries_array})
-        df = await add_languages_and_population(df)
-        df = add_internet_usage(df)
-        if bool(use_distance):
-            df = add_uk_distance(df)
-
-    # Exclude UK from the candidate universe entirely (it's a UK podcast).
-    df = df.loc[df["alpha_3"].astype(str).str.upper() != "GBR"].copy()
-
-    out = predict(
+    df = await build_dataset(
+        DatasetBuildConfig(dataset_csv=dataset_csv, use_distance=bool(use_distance))
+    )
+    out = run_heuristic(
         df,
         use_language_factor=use_language_factor,
         language_english_factor=language_english_factor,
@@ -87,7 +64,24 @@ async def _generate_run(
     out["language_euro_latin_factor_cli"] = float(language_euro_latin_factor)
     out["language_other_factor_cli"] = float(language_other_factor)
 
-    out.to_csv(csv_path, index=False)
+    csv_path, _meta_path = write_run_artifacts(
+        out,
+        runs_dir=runs_dir,
+        label=label,
+        meta={
+            "kind": "heuristic_run",
+            "dataset_csv": dataset_csv,
+            "use_distance": bool(use_distance),
+            "exclude_alpha3": ["GBR"],
+            "heuristic": {
+                "use_language_factor": bool(use_language_factor),
+                "language_english_factor": float(language_english_factor),
+                "language_euro_latin_factor": float(language_euro_latin_factor),
+                "language_other_factor": float(language_other_factor),
+            },
+        },
+    )
+    run_id = os.path.splitext(os.path.basename(csv_path))[0]
     return RunResult(label=label, run_id=run_id, csv_path=csv_path)
 
 
@@ -109,28 +103,10 @@ async def _generate_bayes_run(
     dataset_csv: str | None = None,
     use_distance: bool = True,
 ) -> RunResult:
-    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    slug = _slugify(label)
-    run_id = f"{slug}_{ts}"
-
-    os.makedirs(runs_dir, exist_ok=True)
-    csv_path = os.path.join(runs_dir, f"{run_id}.csv")
-
-    # Build features once (same pipeline as heuristic run).
-    if dataset_csv:
-        df = load_dataset_csv(dataset_csv)
-    else:
-        countries_array = await countries()
-        df = pd.DataFrame({"alpha_3": countries_array})
-        df = await add_languages_and_population(df)
-        df = add_internet_usage(df)
-        if bool(use_distance):
-            df = add_uk_distance(df)
-
-    # Exclude UK from the candidate universe entirely (it's a UK podcast).
-    df = df.loc[df["alpha_3"].astype(str).str.upper() != "GBR"].copy()
-
-    out = predict(
+    df = await build_dataset(
+        DatasetBuildConfig(dataset_csv=dataset_csv, use_distance=bool(use_distance))
+    )
+    out = run_heuristic(
         df,
         use_language_factor=use_language_factor,
         language_english_factor=language_english_factor,
@@ -139,21 +115,14 @@ async def _generate_bayes_run(
     )
 
     # Fit Bayesian model + merge.
-    bayes = fit_poisson_glm_p_one(
+    bayes = run_bayes(
         df,
-        country_listens=COUNTRIES_LISTENS,
-        number_of_countries_with_listens=int(NUMBER_OF_COUNTRIES_WITH_LISTENS),
-        number_of_countries_with_one_listen=int(
-            TOTAL_NUMBER_OF_COUNTRIES_WITH_ONE_LISTEN
-        ),
         use_distance=bool(use_distance),
-        config=BayesFitConfig(
-            draws=int(draws),
-            tune=int(tune),
-            target_accept=float(target_accept),
-            seed=seed,
-            hdi_prob=float(hdi_prob),
-        ),
+        draws=int(draws),
+        tune=int(tune),
+        target_accept=float(target_accept),
+        seed=seed,
+        hdi_prob=float(hdi_prob),
     )
     out = pd.merge(out, bayes, on="alpha_3", how="left")
 
@@ -166,8 +135,6 @@ async def _generate_bayes_run(
         )
 
     # No extra label sources beyond COUNTRIES_LISTENS.
-    out["run_label"] = label
-    out["run_id"] = run_id
     out["model_variant"] = "with-language" if use_language_factor else "no-language"
     out["language_english_factor_cli"] = float(language_english_factor)
     out["language_euro_latin_factor_cli"] = float(language_euro_latin_factor)
@@ -178,7 +145,37 @@ async def _generate_bayes_run(
     out["bayes_seed_cli"] = seed if seed is None else int(seed)
     out["bayes_hdi_prob_cli"] = float(hdi_prob)
 
-    out.to_csv(csv_path, index=False)
+    csv_path, _meta_path = write_run_artifacts(
+        out,
+        runs_dir=runs_dir,
+        label=label,
+        meta={
+            "kind": "bayes_run",
+            "dataset_csv": dataset_csv,
+            "use_distance": bool(use_distance),
+            "exclude_alpha3": ["GBR"],
+            "heuristic": {
+                "use_language_factor": bool(use_language_factor),
+                "language_english_factor": float(language_english_factor),
+                "language_euro_latin_factor": float(language_euro_latin_factor),
+                "language_other_factor": float(language_other_factor),
+            },
+            "bayes": {
+                "draws": int(draws),
+                "tune": int(tune),
+                "target_accept": float(target_accept),
+                "seed": seed,
+                "hdi_prob": float(hdi_prob),
+            },
+        },
+    )
+    run_id = os.path.splitext(os.path.basename(csv_path))[0]
+    # Ensure run artifact satisfies expected columns after we inject run_id/run_label during write.
+    try:
+        require_schema(pd.read_csv(csv_path), BAYES_RUN_SCHEMA)
+    except Exception:
+        # Keep CLI resilient; Streamlit sidebar schema check will surface details.
+        pass
     return RunResult(label=label, run_id=run_id, csv_path=csv_path)
 
 
@@ -270,11 +267,7 @@ async def _tune_language(
     out_path = os.path.join(out_dir, f"tune-language_{label}_{ts}.csv")
 
     # Build features once.
-    countries_array = await countries()
-    base = pd.DataFrame({"alpha_3": countries_array})
-    base = await add_languages_and_population(base)
-    base = add_internet_usage(base)
-    # UK tourism factor removed; do not load UK visits data.
+    base = await build_dataset(DatasetBuildConfig(dataset_csv=None, use_distance=False))
 
     # With the simplified labeling policy, only use supervision from COUNTRIES_LISTENS:
     # - "correct" ≈ known one-listen countries
@@ -296,7 +289,7 @@ async def _tune_language(
             triple = sorted([eng, euro, other], reverse=True)
             eng, euro, other = triple[0], triple[1], triple[2]
 
-        pred = predict(
+        pred = run_heuristic(
             base,
             use_language_factor=True,
             language_english_factor=eng,

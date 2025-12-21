@@ -1,0 +1,24 @@
+{
+  "bayes": {
+    "draws": 50,
+    "hdi_prob": 0.9,
+    "seed": 0,
+    "target_accept": 0.9,
+    "tune": 50
+  },
+  "dataset_csv": null,
+  "exclude_alpha3": [
+    "GBR"
+  ],
+  "heuristic": {
+    "language_english_factor": 1.25,
+    "language_euro_latin_factor": 1.0,
+    "language_other_factor": 0.75,
+    "use_language_factor": false
+  },
+  "kind": "bayes_run",
+  "run_id": "pipeline-final-smoke_20251221T100323Z",
+  "run_label": "pipeline-final-smoke",
+  "timestamp_utc": "20251221T100323Z",
+  "use_distance": true
+}

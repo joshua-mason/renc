@@ -193,3 +193,10 @@
 * might it be possible to estimate total listens if we know they were 38th uk podcast in the charts on may 22nd?
 * we can get a list of countries it definitely has been listened in here but not sure how useful itis https://www.podchaser.com/podcasts/what-did-you-do-yesterday-with-5823474/insights
 * reflection: we are basically trying to create a model for uk tourism (maybe a big mistake that we are ignoring ireland and australian tourism)
+* estimates of most popular countries from rephonic: United Kingdom (68%)
+Ireland (11%)
+Australia (10%)
+United States (7%)
+Canada (2%)
+New Zealand (2%)
+* I kinda wanna refactor the code, maybe start from scratch cause I thihnk it is a bit of a mess at the moment tbh, we probably should consider the way we want the "data pipeline" to work and how we want to view it more holistically than me just tagging on ideasz as we go, now we have something working

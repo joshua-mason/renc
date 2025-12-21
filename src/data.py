@@ -5,6 +5,7 @@ from src.log import log
 import pycountry
 import os
 import math
+from pathlib import Path
 
 COUNTRIES_LIST_URL: str = (
     "https://gist.githubusercontent.com/kalinchernev/486393efcca01623b18d/raw/daa24c9fea66afb7d68f8d69f0c4b8eeb9406e83/countries"
@@ -20,10 +21,16 @@ def _resolve_data_path(relative_path: str) -> str:
     - data/raw/internetusage.csv (preferred)
     - raw/internetusage.csv (fallback)
     """
-    preferred = os.path.join("data", relative_path)
-    if os.path.exists(preferred):
-        return preferred
-    return relative_path
+    # Resolve relative to repo root so this works from any working directory
+    # (e.g. notebooks run from `notebooks/`).
+    repo_root = Path(__file__).resolve().parents[1]
+
+    preferred = repo_root / "data" / relative_path
+    if preferred.exists():
+        return str(preferred)
+
+    fallback = repo_root / relative_path
+    return str(fallback)
 
 
 async def countries() -> ExtensionArray:

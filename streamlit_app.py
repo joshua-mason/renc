@@ -587,7 +587,9 @@ if "bayes_p_one_mean" in df.columns:
     # Prefer showing prediction targets (unknown labels) if present.
     if "bayes_label" in bayes_df.columns:
         unknown_only = st.checkbox(
-            "Only bayes_label=unknown", value=True, help="Hide training labels (one/multi)"
+            "Only bayes_label=unknown",
+            value=True,
+            help="Hide training labels (one/multi)",
         )
     else:
         unknown_only = False
