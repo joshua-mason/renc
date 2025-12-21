@@ -39,6 +39,7 @@ DATASET_SCHEMA = FrameSchema(
         "population",
         "internet_usage_pct",
         "internet_usage_record_year",
+        "english_speakers_pct",
         "languages",
         "latitude",
         "longitude",
@@ -77,6 +78,7 @@ BAYES_RUN_SCHEMA = FrameSchema(
         # inputs (may or may not be included in run CSV):
         "population",
         "internet_usage_pct",
+        "english_speakers_pct",
         "latitude",
         "longitude",
         "uk_distance_km",
@@ -84,6 +86,7 @@ BAYES_RUN_SCHEMA = FrameSchema(
         "run_label",
         "run_id",
         "bayes_use_distance",
+        "bayes_use_english",
         "bayes_draws_cli",
         "bayes_tune_cli",
         "bayes_target_accept_cli",

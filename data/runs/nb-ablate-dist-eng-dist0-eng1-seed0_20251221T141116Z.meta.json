@@ -1,0 +1,18 @@
+{
+  "draws": 2000,
+  "hdi_prob": 0.9,
+  "kind": "bayes_run",
+  "meta_version": 1,
+  "run_id": "nb-ablate-dist-eng-dist0-eng1-seed0_20251221T141116Z",
+  "run_label": "nb-ablate-dist-eng-dist0_eng1-seed0",
+  "seed": 0,
+  "source": "notebook",
+  "target_accept": 0.95,
+  "timestamp_utc": "20251221T141116Z",
+  "tune": 2000,
+  "variant": {
+    "tag": "dist0_eng1",
+    "use_distance": false,
+    "use_english": true
+  }
+}

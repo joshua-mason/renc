@@ -15,6 +15,7 @@ from src.config import (
     TOTAL_NUMBER_OF_COUNTRIES_WITH_ONE_LISTEN,
 )
 from src.data import (
+    add_english_speakers_pct,
     add_internet_usage,
     add_languages_and_population,
     add_uk_distance,
@@ -29,6 +30,7 @@ from src.schema import BAYES_RUN_SCHEMA, DATASET_SCHEMA, require_schema
 class DatasetBuildConfig:
     dataset_csv: str | None = None
     use_distance: bool = True
+    use_english: bool = True
     exclude_alpha3: tuple[str, ...] = ("GBR",)
 
 
@@ -59,6 +61,8 @@ async def build_dataset(cfg: DatasetBuildConfig) -> pd.DataFrame:
         df = pd.DataFrame({"alpha_3": countries_array})
         df = await add_languages_and_population(df)
         df = add_internet_usage(df)
+        if bool(cfg.use_english):
+            df = add_english_speakers_pct(df)
         if bool(cfg.use_distance):
             df = add_uk_distance(df)
 
@@ -93,6 +97,7 @@ def run_bayes(
     df: pd.DataFrame,
     *,
     use_distance: bool,
+    use_english: bool,
     draws: int,
     tune: int,
     target_accept: float,
@@ -108,6 +113,7 @@ def run_bayes(
             TOTAL_NUMBER_OF_COUNTRIES_WITH_ONE_LISTEN
         ),
         use_distance=bool(use_distance),
+        use_english=bool(use_english),
         config=BayesFitConfig(
             draws=int(draws),
             tune=int(tune),

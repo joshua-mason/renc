@@ -76,7 +76,9 @@ def _standardize(
     return (x - mean) / std, float(mean), float(std)
 
 
-def _feature_matrix(df: pd.DataFrame) -> tuple[np.ndarray, list[str]]:
+def _feature_matrix(
+    df: pd.DataFrame, *, use_distance: bool, use_english: bool
+) -> tuple[np.ndarray, list[str]]:
     pop = pd.to_numeric(df.get("population"), errors="coerce").to_numpy(dtype=float)
     pop = np.log(np.clip(pop, 1.0, None))
 
@@ -85,30 +87,26 @@ def _feature_matrix(df: pd.DataFrame) -> tuple[np.ndarray, list[str]]:
     )
     net = net / 100.0
 
-    dist_km = pd.to_numeric(df.get("uk_distance_km"), errors="coerce").to_numpy(
-        dtype=float
-    )
-    dist_km = np.clip(dist_km, 0.0, None)
-    dist = np.log1p(dist_km)
+    feats: list[np.ndarray] = [pop, net]
+    names: list[str] = ["log_population", "internet_rate"]
 
-    # Standardize for sampler stability (fit-time imputation uses train means).
-    feats = [pop, net, dist]
-    names = ["log_population", "internet_rate", "log1p_uk_distance_km"]
-    X = np.column_stack(feats).astype(float)
-    return X, names
+    if bool(use_distance):
+        dist_km = pd.to_numeric(df.get("uk_distance_km"), errors="coerce").to_numpy(
+            dtype=float
+        )
+        dist_km = np.clip(dist_km, 0.0, None)
+        dist = np.log1p(dist_km)
+        feats.append(dist)
+        names.append("log1p_uk_distance_km")
 
+    if bool(use_english):
+        eng_pct = pd.to_numeric(
+            df.get("english_speakers_pct"), errors="coerce"
+        ).to_numpy(dtype=float)
+        eng = np.clip(eng_pct, 0.0, 100.0) / 100.0
+        feats.append(eng)
+        names.append("english_speakers_rate")
 
-def _feature_matrix_no_distance(df: pd.DataFrame) -> tuple[np.ndarray, list[str]]:
-    pop = pd.to_numeric(df.get("population"), errors="coerce").to_numpy(dtype=float)
-    pop = np.log(np.clip(pop, 1.0, None))
-
-    net = pd.to_numeric(df.get("internet_usage_pct"), errors="coerce").to_numpy(
-        dtype=float
-    )
-    net = net / 100.0
-
-    feats = [pop, net]
-    names = ["log_population", "internet_rate"]
     X = np.column_stack(feats).astype(float)
     return X, names
 
@@ -156,6 +154,7 @@ def fit_poisson_glm_p_one(
     number_of_countries_with_listens: int | None = None,
     number_of_countries_with_one_listen: int | None = None,
     use_distance: bool = True,
+    use_english: bool = True,
     config: BayesFitConfig = BayesFitConfig(),
 ) -> pd.DataFrame:
     """
@@ -171,6 +170,13 @@ def fit_poisson_glm_p_one(
         raise ValueError("Expected df to include an 'alpha_3' column.")
 
     counts_alpha3, unresolved_tokens = _counts_map_to_alpha3(country_listens)
+    # Track which countries appear in the COUNTRIES_LISTENS mapping at all (even if value is None).
+    in_country_listens: set[str] = set()
+    for token in country_listens.keys():
+        a3 = _resolve_country_to_alpha3(token)
+        if a3 is not None:
+            in_country_listens.add(a3)
+
     alpha3_series = df["alpha_3"].astype(str).str.upper()
 
     # Build observed y vector (NaN for unknown).
@@ -191,8 +197,8 @@ def fit_poisson_glm_p_one(
     label[y.notna() & (y == 1)] = "observed_one"
     label[y.notna() & (y >= 2)] = "observed_multi"
 
-    X_raw, feature_names = (
-        _feature_matrix(df) if bool(use_distance) else _feature_matrix_no_distance(df)
+    X_raw, feature_names = _feature_matrix(
+        df, use_distance=bool(use_distance), use_english=bool(use_english)
     )
 
     # Fit-time imputation (train means) + standardization (train stats).
@@ -367,6 +373,7 @@ def fit_poisson_glm_p_one(
     out = pd.DataFrame(
         {
             "alpha_3": df["alpha_3"].astype(str).str.upper(),
+            "bayes_in_country_listens_map": alpha3_series.isin(in_country_listens),
             "bayes_label": label.astype(str),
             "bayes_y_observed": y,
             "bayes_lp_mean": lp_mean,
@@ -402,6 +409,7 @@ def fit_poisson_glm_p_one(
             ),
             "bayes_aggregate_one_sigma": float(config.aggregate_one_sigma),
             "bayes_use_distance": bool(use_distance),
+            "bayes_use_english": bool(use_english),
         }
     )
     for j, name in enumerate(feature_names):

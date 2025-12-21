@@ -46,9 +46,14 @@ async def _generate_run(
     uk_floor: float,
     dataset_csv: str | None = None,
     use_distance: bool = True,
+    use_english: bool = True,
 ) -> RunResult:
     df = await build_dataset(
-        DatasetBuildConfig(dataset_csv=dataset_csv, use_distance=bool(use_distance))
+        DatasetBuildConfig(
+            dataset_csv=dataset_csv,
+            use_distance=bool(use_distance),
+            use_english=bool(use_english),
+        )
     )
     out = run_heuristic(
         df,
@@ -72,6 +77,7 @@ async def _generate_run(
             "kind": "heuristic_run",
             "dataset_csv": dataset_csv,
             "use_distance": bool(use_distance),
+            "use_english": bool(use_english),
             "exclude_alpha3": ["GBR"],
             "heuristic": {
                 "use_language_factor": bool(use_language_factor),
@@ -102,9 +108,14 @@ async def _generate_bayes_run(
     hdi_prob: float,
     dataset_csv: str | None = None,
     use_distance: bool = True,
+    use_english: bool = True,
 ) -> RunResult:
     df = await build_dataset(
-        DatasetBuildConfig(dataset_csv=dataset_csv, use_distance=bool(use_distance))
+        DatasetBuildConfig(
+            dataset_csv=dataset_csv,
+            use_distance=bool(use_distance),
+            use_english=bool(use_english),
+        )
     )
     out = run_heuristic(
         df,
@@ -118,6 +129,7 @@ async def _generate_bayes_run(
     bayes = run_bayes(
         df,
         use_distance=bool(use_distance),
+        use_english=bool(use_english),
         draws=int(draws),
         tune=int(tune),
         target_accept=float(target_accept),
@@ -153,6 +165,7 @@ async def _generate_bayes_run(
             "kind": "bayes_run",
             "dataset_csv": dataset_csv,
             "use_distance": bool(use_distance),
+            "use_english": bool(use_english),
             "exclude_alpha3": ["GBR"],
             "heuristic": {
                 "use_language_factor": bool(use_language_factor),
@@ -483,6 +496,11 @@ def main() -> None:
         action="store_true",
         help="Disable distance-from-UK feature (no lat/lon fetch; heuristic score unaffected).",
     )
+    run.add_argument(
+        "--no-english",
+        action="store_true",
+        help="Disable English speakers % feature (from wikipedia_eng_lng_pop.csv).",
+    )
     run.add_argument("--lang-eng", type=float, default=1.25, help="English multiplier")
     run.add_argument(
         "--lang-euro",
@@ -560,6 +578,11 @@ def main() -> None:
         help="Disable distance-from-UK covariate in the Bayesian model.",
     )
     bayes_run.add_argument(
+        "--no-english",
+        action="store_true",
+        help="Disable English speakers % covariate in the Bayesian model.",
+    )
+    bayes_run.add_argument(
         "--launch",
         action="store_true",
         help="Launch Streamlit after generating, preloading this run",
@@ -622,6 +645,7 @@ def main() -> None:
                 uk_floor=float(args.uk_floor),
                 dataset_csv=(str(args.dataset_csv) if args.dataset_csv else None),
                 use_distance=(not bool(args.no_distance)),
+                use_english=(not bool(args.no_english)),
             )
         )
         print(result.csv_path)
@@ -666,6 +690,7 @@ def main() -> None:
                 hdi_prob=float(args.hdi_prob),
                 dataset_csv=(str(args.dataset_csv) if args.dataset_csv else None),
                 use_distance=(not bool(args.no_distance)),
+                use_english=(not bool(args.no_english)),
             )
         )
         print(result.csv_path)

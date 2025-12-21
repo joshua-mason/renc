@@ -75,6 +75,54 @@ def _meta_path_for_csv_path(csv_path: str) -> str:
     return f"{base}.meta.json"
 
 
+def _pick_label_radio(
+    container: object,
+    *,
+    title: str,
+    labels: list[str],
+    default_index: int,
+    key_prefix: str,
+) -> str:
+    """
+    Streamlit UX helper: pick a run via a clickable list (radio) rather than a dropdown.
+    Includes a filter textbox so large run directories remain usable.
+    """
+    filt = getattr(container, "text_input")(
+        "Filter runs",
+        value="",
+        placeholder="type to filter (e.g. dist1_eng1, seed2, 20251221T...)",
+        key=f"{key_prefix}__filter",
+    )
+
+    if filt.strip():
+        f = filt.strip().lower()
+        idxs = [i for i, lab in enumerate(labels) if f in lab.lower()]
+    else:
+        idxs = list(range(len(labels)))
+
+    if not idxs:
+        getattr(container, "warning")(
+            "No runs match this filter. Clear the filter to see all."
+        )
+        idxs = list(range(len(labels)))
+
+    labels_f = [labels[i] for i in idxs]
+
+    default_label = labels[default_index] if 0 <= default_index < len(labels) else None
+    if default_label is not None and default_label in labels_f:
+        idx_default_f = labels_f.index(default_label)
+    else:
+        idx_default_f = 0
+
+    getattr(container, "caption")(f"Showing {len(labels_f)} of {len(labels)} runs")
+    return getattr(container, "radio")(
+        title,
+        options=labels_f,
+        index=idx_default_f,
+        key=f"{key_prefix}__radio",
+    )
+
+
 def _load_meta_for_loaded_from(loaded_from: str) -> dict | None:
     if not loaded_from or loaded_from.startswith("upload:"):
         return None
@@ -123,8 +171,12 @@ else:
                 default_idx = i
                 break
 
-    selected_label = st.sidebar.selectbox(
-        "Select a dataset", options=labels, index=default_idx
+    selected_label = _pick_label_radio(
+        st.sidebar,
+        title="Select a dataset",
+        labels=labels,
+        default_index=default_idx,
+        key_prefix="main_run_picker",
     )
     selected_path = available_paths[labels.index(selected_label)]
     df = load_csv_path(selected_path)
@@ -246,6 +298,7 @@ with tabs[1]:
             "alpha_3",
             "bayes_y_observed",
             "population",
+            "english_speakers_pct",
             "internet_usage_pct",
             "internet_usage_record_year",
             "latitude",
@@ -324,6 +377,7 @@ with tabs[2]:
                     "country_name",
                     "alpha_3",
                     "population",
+                    "english_speakers_pct",
                     "internet_usage_pct",
                     "uk_distance_km",
                     "bayes_mu_mean",
@@ -432,10 +486,20 @@ with tabs[4]:
         labels_all = [_label_for_path(p) for p in all_paths]
         c1, c2 = st.columns(2)
         with c1:
-            a_label = st.selectbox("Run A", options=labels_all, index=0)
+            a_label = _pick_label_radio(
+                st,
+                title="Run A",
+                labels=labels_all,
+                default_index=0,
+                key_prefix="compare_run_a",
+            )
         with c2:
-            b_label = st.selectbox(
-                "Run B", options=labels_all, index=1 if len(labels_all) > 1 else 0
+            b_label = _pick_label_radio(
+                st,
+                title="Run B",
+                labels=labels_all,
+                default_index=1 if len(labels_all) > 1 else 0,
+                key_prefix="compare_run_b",
             )
         path_a = all_paths[labels_all.index(a_label)]
         path_b = all_paths[labels_all.index(b_label)]
@@ -682,6 +746,7 @@ with tabs[5]:
                 "bayes_p_one_mean",
                 "bayes_mu_mean",
                 "uk_distance_km",
+                "english_speakers_pct",
                 "bayes_y_observed",
                 "model_rank",
                 "total_score",

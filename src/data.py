@@ -140,6 +140,52 @@ def add_internet_usage(df: pd.DataFrame) -> pd.DataFrame:
     return pd.merge(df, usage_add, on="alpha_3", how="left")
 
 
+def add_english_speakers_pct(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Merge English-speaking population share from `raw/wikipedia_eng_lng_pop.csv`.
+
+    Produces:
+    - english_speakers_pct: float in [0, 100] (may be NaN when missing)
+
+    Notes:
+    - Uses `Q3_iso_alpha` (alpha-3) from the source for a stable join.
+    - We intentionally do not attempt to impute missing values here; the Bayes model
+      already performs train-mean imputation during fit for stability.
+    """
+    path = _resolve_data_path(os.path.join("raw", "wikipedia_eng_lng_pop.csv"))
+    src = pd.read_csv(path, dtype=str)
+    if "Q3_iso_alpha" not in src.columns:
+        return df
+    if "Total English speakers (%)" not in src.columns:
+        return df
+
+    add = src[["Q3_iso_alpha", "Total English speakers (%)"]].copy()
+    add = add.rename(
+        columns={
+            "Q3_iso_alpha": "alpha_3",
+            "Total English speakers (%)": "english_speakers_pct",
+        }
+    )
+    add["alpha_3"] = add["alpha_3"].astype(str).str.upper()
+    add["english_speakers_pct"] = (
+        add["english_speakers_pct"]
+        .astype(str)
+        .str.replace("%", "", regex=False)
+        .str.replace(",", "", regex=False)
+    )
+    add["english_speakers_pct"] = pd.to_numeric(
+        add["english_speakers_pct"], errors="coerce"
+    )
+    add["english_speakers_pct"] = add["english_speakers_pct"].clip(
+        lower=0.0, upper=100.0
+    )
+    add = add.dropna(subset=["alpha_3"]).drop_duplicates(
+        subset=["alpha_3"], keep="first"
+    )
+
+    return pd.merge(df, add, on="alpha_3", how="left")
+
+
 def add_uk_visits_abroad(df: pd.DataFrame) -> pd.DataFrame:
     visits_path = _resolve_data_path(os.path.join("raw", "ukvisitsabroad.csv"))
     visits_df = pd.read_csv(visits_path, sep="\t", dtype=str)
